@@ -3,6 +3,7 @@
 !.env.example
 *service-account*.json
 *-key.json
+secrets/
 
 # Dependencies and builds
 node_modules/
