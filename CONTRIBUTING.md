@@ -48,8 +48,7 @@ Names go next to each person below once we've agreed who takes what.
   demo students.
 - **Person 4 (Bryan): the app, deployment and submission.** Every screen (student submit and viva
   pages, lecturer report and class view), the recording-consent step, sign-in, phone layout,
-  deploying to Cloud Run, the
-  resettable demo data, the README, and the pitch deck and backup video.
+  deploying to Cloud Run, the resettable demo data, the README, and the pitch deck and backup video.
 
 ## Milestones (prototype due 10 Nov, 11:59 PM MYT)
 
@@ -57,10 +56,9 @@ Names go next to each person below once we've agreed who takes what.
    A spoken back-and-forth working on its own (P2). Scoring a hard-coded answer (P3). Basic
    submit page deployed on Cloud Run from `dev` (P4).
 2. **6–7 Nov: viva connected.** Real questions feed the viva (P1+P2), text-chat fallback working
-   as the safety net (P2), transcripts get scored (P3),
-   student flow joined up in the app (P4).
+   as the safety net (P2), transcripts get scored (P3), student flow joined up in the app (P4).
 3. **8 Nov: lecturer side.** Reports and class stats (P3), report page and class view (P4).
 4. **9 Nov: demo ready.** Demo mode (P2), demo data and the two staged submissions (P3),
    polish and backup video (P4). Everyone: bug fixes.
-5. **10 Nov: submit.** Code freeze at 6 PM MYT. Bryan merges `dev` into `main`, final README, pitch deck PDF, submit on the
-   hackathon workspace. Everyone rehearses the demo.
+5. **10 Nov: submit.** Code freeze at 6 PM MYT. Bryan merges `dev` into `main`, final README,
+   pitch deck PDF, submit on the hackathon workspace. Everyone rehearses the demo.
