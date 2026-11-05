@@ -2,7 +2,7 @@
 
 // Step 3 test page: get a pass from our server, then connect to Gemini Live with it.
 // No microphone yet; that's step 4.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type Session } from "@google/genai";
 
 type Status = "idle" | "getting-pass" | "connecting" | "connected" | "error";
@@ -10,14 +10,21 @@ type Status = "idle" | "getting-pass" | "connecting" | "connected" | "error";
 export default function VivaTestPage() {
   const [status, setStatus] = useState<Status>("idle");
   const [detail, setDetail] = useState("");
+  const [passcode, setPasscode] = useState("");
   const sessionRef = useRef<Session | null>(null);
+
+  // Close the connection if the page is left while connected.
+  useEffect(() => () => sessionRef.current?.close(), []);
 
   async function connect() {
     setDetail("");
     try {
       setStatus("getting-pass");
-      const res = await fetch("/api/viva/token", { method: "POST" });
-      const body = await res.json();
+      const res = await fetch("/api/viva/token", {
+        method: "POST",
+        headers: passcode ? { "x-demo-code": passcode } : {},
+      });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? `Token request failed (${res.status})`);
 
       setStatus("connecting");
@@ -56,6 +63,16 @@ export default function VivaTestPage() {
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 480, margin: "48px auto", padding: "0 16px" }}>
       <h1>Viva connection test</h1>
       <p>Gets a one-time pass from our server, then connects to Gemini Live with it.</p>
+      <label style={{ display: "block", margin: "0 0 12px" }}>
+        Demo passcode (only if this server asks for one){" "}
+        <input
+          value={passcode}
+          onChange={(e) => setPasscode(e.target.value)}
+          disabled={busy || status === "connected"}
+          autoComplete="off"
+          style={{ fontSize: 16 }}
+        />
+      </label>
       {status === "connected" ? (
         <button onClick={disconnect}>Disconnect</button>
       ) : (
@@ -66,7 +83,11 @@ export default function VivaTestPage() {
       <p data-testid="status">
         Status: <strong>{labels[status]}</strong>
       </p>
-      {detail && <p style={{ color: "#b00020" }}>{detail}</p>}
+      {detail && (
+        <p role="alert" style={{ color: "#b00020" }}>
+          {detail}
+        </p>
+      )}
     </main>
   );
 }
