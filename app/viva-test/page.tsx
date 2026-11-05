@@ -28,6 +28,9 @@ export default function VivaTestPage() {
   // Each Start gets a new number. Anything from an older attempt (a late close
   // event, a slow mic prompt) sees it's no longer current and cleans up quietly.
   const attemptRef = useRef(0);
+  // Set when Gemini has warned it will close the connection (goAway), so the
+  // close that follows is expected and isn't reported as an error.
+  const closingRef = useRef(false);
 
   // Clean up the mic and connection if the page is closed mid-viva.
   useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -38,6 +41,7 @@ export default function VivaTestPage() {
       // let the examiner finish its sentence, then end cleanly.
       micRef.current?.stop();
       micRef.current = null;
+      closingRef.current = true;
       setStatus("closing");
       const attempt = attemptRef.current;
       const finish = () => {
@@ -126,6 +130,12 @@ export default function VivaTestPage() {
           onerror: () => {},
           onclose: (e) => {
             if (!current()) return; // we closed it, or it belongs to an older attempt
+            if (closingRef.current) {
+              // Expected after goAway. Local playback keeps going; the pending
+              // whenIdle or the backstop timer ends the viva cleanly.
+              sessionRef.current = null;
+              return;
+            }
             fail(e.reason ? `The viva was disconnected: ${e.reason}` : `The viva was disconnected (code ${e.code}).`);
           },
         },
@@ -167,6 +177,7 @@ export default function VivaTestPage() {
   /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
     attemptRef.current++;
+    closingRef.current = false;
     micRef.current?.stop();
     micRef.current = null;
     const session = sessionRef.current;
