@@ -1,13 +1,14 @@
 "use client";
 
-// Step 4 test page: a spoken conversation with the AI examiner.
-// Mic in, AI voice out, both sides written out live. Plain on purpose;
-// the real screens get designed separately and reuse lib/viva.
+// Viva test page: a spoken viva with the AI examiner, with question progress,
+// a countdown and a graceful ending. Plain on purpose; the real screens get
+// designed separately and reuse lib/viva.
 import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
 import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
-import { SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
+import { MODE_SECONDS, SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
+import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
 
 type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
@@ -29,15 +30,16 @@ export default function VivaTestPage() {
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
 
   const sessionRef = useRef<Session | null>(null);
+  const planRef = useRef<VivaPlan | null>(null);
   const micRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<VoicePlayer | null>(null);
   // Each Start gets a new number. Anything from an older attempt (a late close
   // event, a slow mic prompt) sees it's no longer current and cleans up quietly.
   const attemptRef = useRef(0);
-  // Set when Gemini has warned it will close the connection (goAway), so the
-  // close that follows is expected and isn't reported as an error.
-  const closingRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The current viva's graceful ending (time-up, end_viva or Gemini's goAway).
+  // While it's closing, the connection dropping is expected, not an error.
+  const endingRef = useRef<Ending | null>(null);
+  const stopCountdownRef = useRef<(() => void) | null>(null);
 
   // Clean up the mic and connection if the page is closed mid-viva.
   useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -53,6 +55,7 @@ export default function VivaTestPage() {
       const functionResponses = answerToolCalls(msg.toolCall.functionCalls, {
         onStartQuestion: setQuestionId,
         onEndViva: () => wrapUp("Viva complete. Thank you!"),
+        knownQuestionIds: planRef.current?.questions.map((q) => q.id),
       });
       sessionRef.current?.sendToolResponse({ functionResponses });
       return;
@@ -68,6 +71,7 @@ export default function VivaTestPage() {
       for (const part of content.modelTurn?.parts ?? []) {
         if (part.inlineData?.data) {
           playerRef.current?.play(part.inlineData.data);
+          endingRef.current?.audioArrived();
           setAiSpeaking(true);
         }
       }
@@ -106,6 +110,12 @@ export default function VivaTestPage() {
     });
     playerRef.current = player;
     void player.resume();
+    endingRef.current = createEnding({
+      isPlaying: () => player.isPlaying(),
+      onFinish: (notice) => {
+        if (current()) endWithNotice(notice);
+      },
+    });
 
     try {
       // Ask for the mic first, so the permission prompt doesn't eat into the
@@ -139,9 +149,9 @@ export default function VivaTestPage() {
           onerror: () => {},
           onclose: (e) => {
             if (!current()) return; // we closed it, or it belongs to an older attempt
-            if (closingRef.current) {
-              // Expected after goAway. Local playback keeps going; the pending
-              // whenIdle or the backstop timer ends the viva cleanly.
+            if (endingRef.current?.closing) {
+              // Expected while wrapping up. Local playback keeps going, and the
+              // ending closes the page once the examiner has finished speaking.
               sessionRef.current = null;
               return;
             }
@@ -155,65 +165,38 @@ export default function VivaTestPage() {
       if (!current()) return;
       sessionRef.current = session;
 
+      planRef.current = body.plan;
       setPlan(body.plan);
       setStatus("live");
-      startTimer(Number(body.seconds) || 300, attempt);
+      stopCountdownRef.current = startCountdown(Number(body.seconds) || MODE_SECONDS[mode], setSecondsLeft, timeUp);
       session.sendClientContent({ turns: KICKOFF, turnComplete: true });
     } catch (err) {
       if (current()) fail(describeError(err));
     }
   }
 
-  /** Counts down the viva's time limit; when it runs out, the examiner wraps up. */
-  function startTimer(seconds: number, attempt: number) {
-    const deadline = Date.now() + seconds * 1000;
-    setSecondsLeft(seconds);
-    timerRef.current = setInterval(() => {
-      if (attemptRef.current !== attempt) return stopTimer();
-      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      setSecondsLeft(left);
-      if (left === 0) {
-        stopTimer();
-        sessionRef.current?.sendClientContent({ turns: TIME_UP, turnComplete: true });
-        // Give the examiner a moment to start its closing sentence before checking it has finished.
-        wrapUp("Time's up. The viva has ended.", 4000);
-      }
-    }, 250);
+  /** The countdown ran out: stop listening and ask the examiner to close. */
+  function timeUp() {
+    stopListening();
+    // Tell Gemini the student's audio has ended, so it isn't waiting for the rest of a sentence.
+    sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
+    sessionRef.current?.sendClientContent({ turns: TIME_UP, turnComplete: true });
+    // Wait for the examiner to start its thank-you, then for it to finish.
+    wrapUp("Time's up. The viva has ended.", { waitForSpeech: true });
   }
 
-  function stopTimer() {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
+  /** Ends the viva gracefully: stop listening, then let the examiner finish speaking. */
+  function wrapUp(notice: string, opts?: { waitForSpeech?: boolean }) {
+    if (!endingRef.current?.wrapUp(notice, opts)) return; // already ending
+    stopListening();
+    setStatus("closing");
   }
 
-  /**
-   * Ends the viva gracefully: stop listening, let the examiner finish speaking,
-   * then show the notice. Waits until no audio has played for a moment, with a
-   * backstop in case audio never reports that it finished.
-   */
-  function wrapUp(notice: string, firstCheckMs = 1500, backstopMs = 15000) {
-    if (closingRef.current) return;
-    closingRef.current = true;
+  function stopListening() {
+    stopCountdownRef.current?.();
+    stopCountdownRef.current = null;
     micRef.current?.stop();
     micRef.current = null;
-    stopTimer();
-    setStatus("closing");
-
-    const attempt = attemptRef.current;
-    let done = false;
-    const finish = () => {
-      if (done || attemptRef.current !== attempt) return; // already ended, or a new viva started
-      done = true;
-      endWithNotice(notice);
-    };
-    const settle = () => {
-      if (done || attemptRef.current !== attempt) return;
-      const player = playerRef.current;
-      if (player?.isPlaying()) player.whenIdle(() => setTimeout(settle, 1500));
-      else finish();
-    };
-    setTimeout(settle, firstCheckMs);
-    setTimeout(finish, backstopMs);
   }
 
   function fail(message: string) {
@@ -240,10 +223,10 @@ export default function VivaTestPage() {
   /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
     attemptRef.current++;
-    closingRef.current = false;
-    stopTimer();
-    micRef.current?.stop();
-    micRef.current = null;
+    endingRef.current?.cancel();
+    endingRef.current = null;
+    planRef.current = null;
+    stopListening();
     const session = sessionRef.current;
     sessionRef.current = null;
     session?.close();
@@ -278,10 +261,10 @@ export default function VivaTestPage() {
       <fieldset style={styles.fieldset} disabled={running}>
         <legend>Length</legend>
         <label>
-          <input type="radio" name="mode" checked={mode === "full"} onChange={() => setMode("full")} /> Full viva (5 min)
+          <input type="radio" name="mode" checked={mode === "full"} onChange={() => setMode("full")} /> Full viva ({formatLength(MODE_SECONDS.full)})
         </label>{" "}
         <label>
-          <input type="radio" name="mode" checked={mode === "demo"} onChange={() => setMode("demo")} /> Demo (30 s)
+          <input type="radio" name="mode" checked={mode === "demo"} onChange={() => setMode("demo")} /> Demo ({formatLength(MODE_SECONDS.demo)})
         </label>
       </fieldset>
 
@@ -312,8 +295,8 @@ export default function VivaTestPage() {
               plan.assignmentTitle
             )}
           </span>
-          {secondsLeft !== null && (
-            <span data-testid="timer" aria-label={`${secondsLeft} seconds left`} style={{ whiteSpace: "nowrap" }}>
+          {secondsLeft !== null && status === "live" && (
+            <span data-testid="timer" role="timer" style={{ whiteSpace: "nowrap" }}>
               {formatTime(secondsLeft)} left
             </span>
           )}
@@ -353,6 +336,10 @@ function statusLabel(status: Status, aiSpeaking: boolean) {
     case "error":
       return "Something went wrong";
   }
+}
+
+function formatLength(seconds: number) {
+  return seconds >= 60 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
 }
 
 function formatTime(seconds: number) {
