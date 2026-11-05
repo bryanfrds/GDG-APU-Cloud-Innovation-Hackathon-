@@ -90,4 +90,12 @@ describe("POST /api/viva/token", () => {
     expect((await POST(request(from))).status).toBe(429);
     expect((await POST(request({ "x-forwarded-for": "5.6.7.8" }))).status).toBe(200);
   });
+
+  it("can't be dodged by faking the first x-forwarded-for address", async () => {
+    const { POST } = await loadRoute();
+    for (let i = 0; i < 10; i++) {
+      expect((await POST(request({ "x-forwarded-for": `9.9.9.${i}, 1.2.3.4` }))).status).toBe(200);
+    }
+    expect((await POST(request({ "x-forwarded-for": "8.8.8.8, 1.2.3.4" }))).status).toBe(429);
+  });
 });

@@ -14,8 +14,12 @@ export function createRateLimiter({ limit, windowMs }: { limit: number; windowMs
       }
       recent.push(now);
       hits.set(key, recent);
-      // Keep memory bounded if many different addresses show up.
-      if (hits.size > 10_000) hits.clear();
+      // Keep memory bounded: drop addresses with no recent calls, never active ones.
+      if (hits.size > 10_000) {
+        for (const [k, times] of hits) {
+          if (!times.some((t) => now - t < windowMs)) hits.delete(k);
+        }
+      }
       return true;
     },
   };
