@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExaminerInstructions, parseMode, parsePlan, SAMPLE_PLAN, VIVA_TOOLS, type VivaPlan } from "./plan";
+import { buildExaminerInstructions, parseMode, parsePlan, SAMPLE_PLAN, samePlan, VIVA_TOOLS, type VivaPlan } from "./plan";
 
 const good = {
   assignmentTitle: "  Linked lists  ",
@@ -181,5 +181,22 @@ describe("VIVA_TOOLS", () => {
   it("declares start_question and end_viva", () => {
     const names = VIVA_TOOLS.flatMap((t) => t.functionDeclarations ?? []).map((f) => f.name);
     expect(names).toEqual(["start_question", "end_viva"]);
+  });
+});
+
+describe("samePlan", () => {
+  it("matches plans with the same questions, whatever order the keys are in", () => {
+    const a = { assignmentTitle: "Lists", questions: [{ id: "q1", text: "Why?", focus: "f" }] };
+    const b = { questions: [{ focus: "f", text: "Why?", id: "q1" }], assignmentTitle: "Lists" };
+    expect(samePlan(a, b)).toBe(true);
+  });
+
+  it("notices any changed title, question, focus or count", () => {
+    const a = { assignmentTitle: "Lists", questions: [{ id: "q1", text: "Why?" }] };
+    expect(samePlan(a, { ...a, assignmentTitle: "Trees" })).toBe(false);
+    expect(samePlan(a, { ...a, questions: [{ id: "q1", text: "What?" }] })).toBe(false);
+    expect(samePlan(a, { ...a, questions: [{ id: "q2", text: "Why?" }] })).toBe(false);
+    expect(samePlan(a, { ...a, questions: [{ id: "q1", text: "Why?", focus: "easy" }] })).toBe(false);
+    expect(samePlan(a, { ...a, questions: [...a.questions, { id: "q2", text: "More?" }] })).toBe(false);
   });
 });
