@@ -53,6 +53,17 @@ export default function VivaTestPage() {
       setTimeout(finish, 8000); // in case the audio never reports that it finished
       return;
     }
+    if (msg.toolCall) {
+      // The examiner reports progress (start_question, end_viva) and waits for a
+      // reply before it carries on, so always answer. Showing progress comes next.
+      const functionResponses = (msg.toolCall.functionCalls ?? []).map((call) => ({
+        id: call.id,
+        name: call.name,
+        response: { ok: true },
+      }));
+      sessionRef.current?.sendToolResponse({ functionResponses });
+      return;
+    }
     const content = msg.serverContent;
     if (!content) return;
 
