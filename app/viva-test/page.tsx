@@ -13,6 +13,7 @@ import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
 import type { EndReason, VivaRecord } from "@/lib/viva/record";
 import { recordFileName, sendRecord } from "@/lib/viva/save";
+import { MAX_TYPED_CHARS, prepareTypedAnswer, typedAnswerMessage } from "@/lib/viva/typed-answer";
 import { createVivaFinisher, IDLE_STATE, type Finisher, type FinisherState, type SaveState } from "@/lib/viva/finisher";
 
 type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
@@ -33,6 +34,13 @@ export default function VivaTestPage() {
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [finished, setFinished] = useState<FinisherState>(IDLE_STATE);
+  const [typed, setTyped] = useState("");
+  const [typedError, setTypedError] = useState("");
+  const [muted, setMuted] = useState(false);
+  // While typing, the mic is paused: mixing a silent audio stream with typed answers
+  // makes Gemini think the student said nothing, and it moves on or answers itself.
+  const [typingMode, setTypingMode] = useState(false);
+  const typingRef = useRef(false);
 
   const sessionRef = useRef<Session | null>(null);
   const planRef = useRef<VivaPlan | null>(null);
@@ -142,6 +150,7 @@ export default function VivaTestPage() {
     });
     playerRef.current = player;
     void player.resume();
+    player.setMuted(muted);
     endingRef.current = createEnding({
       isPlaying: () => player.isPlaying(),
       onFinish: (notice) => {
@@ -154,7 +163,7 @@ export default function VivaTestPage() {
       // Ask for the mic first, so the permission prompt doesn't eat into the
       // token's short start window. Audio before the session opens is dropped.
       const mic = await startMic((data) => {
-        sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
+        if (!typingRef.current) sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
       });
       if (!current()) return mic.stop();
       micRef.current = mic;
@@ -280,9 +289,49 @@ export default function VivaTestPage() {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
+  /** Sends a typed answer into the live viva, instead of speaking. */
+  function sendTyped(e: React.FormEvent) {
+    e.preventDefault();
+    const session = sessionRef.current;
+    if (!session || status !== "live") return;
+    const prepared = prepareTypedAnswer(typed);
+    if ("error" in prepared) {
+      setTypedError(prepared.error);
+      return;
+    }
+    // If the examiner is mid-sentence, the student is answering over it: stop its voice.
+    playerRef.current?.interrupt();
+    useTyping(true);
+    session.sendClientContent(typedAnswerMessage(prepared.text));
+    // Typed answers don't come back as speech transcription, so add them to the transcript here.
+    const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAtRef.current };
+    let next = closeTurn(transcriptRef.current, "complete");
+    next = closeTurn(appendText(next, "student", prepared.text, meta), "complete");
+    transcriptRef.current = next;
+    setTranscript(next);
+    setTyped("");
+    setTypedError("");
+  }
+
+  /** Switches between answering by typing (mic paused) and by speaking. */
+  function useTyping(on: boolean) {
+    if (typingRef.current === on) return;
+    typingRef.current = on;
+    setTypingMode(on);
+    // Tell Gemini the audio has stopped, so it doesn't wait for, or imagine, a spoken answer.
+    if (on) sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
+  }
+
+  function toggleMute(next: boolean) {
+    setMuted(next);
+    playerRef.current?.setMuted(next);
+  }
+
   /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
     attemptRef.current++;
+    typingRef.current = false;
+    setTypingMode(false);
     endingRef.current?.cancel();
     endingRef.current = null;
     planRef.current = null;
@@ -340,6 +389,11 @@ export default function VivaTestPage() {
         </button>
       )}
 
+      <label style={{ display: "block", margin: "0 0 12px" }}>
+        <input type="checkbox" checked={muted} onChange={(e) => toggleMute(e.target.checked)} /> Mute the
+        examiner&apos;s voice (read its questions below instead)
+      </label>
+
       <p data-testid="status" aria-live="polite" style={{ margin: "12px 0" }}>
         <strong>{statusLabel(status, aiSpeaking)}</strong>
       </p>
@@ -368,6 +422,41 @@ export default function VivaTestPage() {
         <p role="alert" style={{ color: status === "error" ? "#b00020" : "#555" }}>
           {error}
         </p>
+      )}
+
+      {status === "live" && (
+        <form onSubmit={sendTyped} style={styles.typed} aria-label="Type an answer">
+          <label htmlFor="typed-answer" style={{ display: "block", marginBottom: 4 }}>
+            Prefer typing, or is the audio struggling? Type your answer:
+          </label>
+          <span style={{ display: "flex", gap: 8 }}>
+            <input
+              id="typed-answer"
+              value={typed}
+              onChange={(e) => {
+                setTyped(e.target.value);
+                if (typedError) setTypedError("");
+              }}
+              maxLength={MAX_TYPED_CHARS * 2}
+              autoComplete="off"
+              style={{ flex: 1, fontSize: 16, minWidth: 0 }}
+            />
+            <button type="submit">Send</button>
+          </span>
+          {typingMode ? (
+            <span style={{ display: "block", marginTop: 6, color: "#555" }}>
+              Mic paused while you type.{" "}
+              <button type="button" onClick={() => useTyping(false)}>
+                Speak instead
+              </button>
+            </span>
+          ) : null}
+          {typedError && (
+            <span role="alert" style={{ color: "#b00020", display: "block", marginTop: 4 }}>
+              {typedError}
+            </span>
+          )}
+        </form>
       )}
 
       {record && !running && (
@@ -474,6 +563,7 @@ const styles = {
   button: { fontSize: 16, padding: "10px 18px", cursor: "pointer" },
   ai: { background: "#f2f2f2", padding: "8px 12px", borderRadius: 8 },
   student: { padding: "8px 12px" },
+  typed: { border: "1px solid #e5e5e5", borderRadius: 8, padding: "8px 12px", margin: "0 0 12px" },
   save: {
     display: "flex",
     flexWrap: "wrap",
