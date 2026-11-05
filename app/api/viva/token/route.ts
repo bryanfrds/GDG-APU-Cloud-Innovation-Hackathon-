@@ -19,6 +19,9 @@ export const dynamic = "force-dynamic";
 // stops a script from minting hundreds of viva sessions on our bill.
 const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
+// A full plan (4 questions with focus notes) is under 3 KB; anything near 16 KB is not a plan.
+const MAX_BODY_BYTES = 16_000;
+
 export async function POST(req: Request) {
   // On a public URL, set DEMO_PASSCODE so strangers can't run up the Gemini bill.
   // Left unset (local dev), anyone who can reach the server can start a viva.
@@ -37,7 +40,11 @@ export async function POST(req: Request) {
   // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
   // TODO(Person 1): take a submission id instead and load its questions from Firestore,
   // so a student can't send their own questions.
+  const tooLarge = () => Response.json({ error: "The request is too large." }, { status: 413 });
+  // Refuse early when the size is declared, then check what actually arrived.
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return tooLarge();
   const raw = await req.text();
+  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return tooLarge();
   let body: { plan?: unknown; mode?: unknown } = {};
   if (raw.trim()) {
     try {

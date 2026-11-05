@@ -94,6 +94,25 @@ describe("POST /api/viva/token", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it("rejects a body that is far too large", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(request({}, { mode: "demo", padding: "x".repeat(20_000) }));
+    expect(res.status).toBe(413);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("counts the size in bytes, so 6,000 Chinese characters (18 KB) is too large", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(request({}, { mode: "demo", padding: "排".repeat(6_000) }));
+    expect(res.status).toBe(413);
+  });
+
+  it("refuses early when the declared size is too large", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(request({ "content-length": "50000" }, { mode: "demo" }));
+    expect(res.status).toBe(413);
+  });
+
   it("uses the sample plan when the body is empty", async () => {
     const { POST } = await loadRoute();
     const res = await POST(request());
