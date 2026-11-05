@@ -57,9 +57,12 @@ export function buildRecord(input: {
   endReason: EndReason;
   transcript: Transcript;
 }): VivaRecord {
+  // Whole milliseconds only: ISO times can't hold fractions, and the server
+  // checks turn times against the duration it reads back from them.
+  const startedAt = Math.round(input.startedAt);
   const limit = maxDurationMs(input.mode);
-  const endedAt = Math.min(Math.max(input.endedAt, input.startedAt), input.startedAt + limit);
-  const durationMs = endedAt - input.startedAt;
+  const endedAt = Math.min(Math.max(Math.round(input.endedAt), startedAt), startedAt + limit);
+  const durationMs = endedAt - startedAt;
 
   const turns: RecordTurn[] = [];
   let lastAt = 0;
@@ -79,7 +82,7 @@ export function buildRecord(input: {
     submissionId: input.submissionId ?? null,
     mode: input.mode,
     plan: input.plan,
-    startedAt: new Date(input.startedAt).toISOString(),
+    startedAt: new Date(startedAt).toISOString(),
     endedAt: new Date(endedAt).toISOString(),
     endReason: input.endReason,
     truncated: turns.length > RECORD_LIMITS.turns,
@@ -93,7 +96,12 @@ function splitText(text: string, max: number): string[] {
   let rest = text;
   while (rest.length > max) {
     let cut = rest.lastIndexOf(" ", max);
-    if (cut < max / 2) cut = max; // no good space: cut mid-word
+    if (cut < max / 2) {
+      // No good space: cut mid-word, but never between the two halves of an emoji.
+      cut = max;
+      const code = rest.charCodeAt(cut - 1);
+      if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    }
     pieces.push(rest.slice(0, cut).trim());
     rest = rest.slice(cut).trim();
   }
@@ -145,6 +153,10 @@ export function parseRecord(input: unknown, now = Date.now()): { record: VivaRec
   for (const [i, t] of r.turns.entries()) {
     const { who, text, questionId, atMs } = (t ?? {}) as Record<string, unknown>;
     if (who !== "ai" && who !== "student") return { error: `Turn ${i + 1}: who must be ai or student.` };
+    // Refuse huge raw text before cleaning it, so padding with hidden characters can't make us do lots of work.
+    if (typeof text === "string" && text.length > RECORD_LIMITS.text * 2) {
+      return { error: `Turn ${i + 1}: text must be 1–${RECORD_LIMITS.text} characters.` };
+    }
     const clean = typeof text === "string" ? stripHiddenChars(text).trim() : "";
     if (!clean || clean.length > RECORD_LIMITS.text) {
       return { error: `Turn ${i + 1}: text must be 1–${RECORD_LIMITS.text} characters.` };

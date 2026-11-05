@@ -104,6 +104,27 @@ describe("buildRecord", () => {
     expect(roundTrip(record)).toHaveProperty("record");
   });
 
+  it("rounds fractional start and end times so the server still accepts the record", () => {
+    for (let i = 0; i < 200; i++) {
+      const startedAt = START + Math.random();
+      const endedAt = startedAt + 1 + Math.random() * 29_000;
+      let tr = appendText(EMPTY_TRANSCRIPT, "ai", "Hi", { atMs: Math.random() * 40_000 });
+      tr = closeTurn(tr, "complete");
+      tr = appendText(tr, "student", "Hello", { atMs: Math.random() * 40_000 });
+      const record = build({ startedAt, endedAt, transcript: tr });
+      expect(record.turns.every((x) => Number.isInteger(x.atMs))).toBe(true);
+      expect(roundTrip(record)).toHaveProperty("record");
+    }
+  });
+
+  it("never splits an emoji in half when a long answer has no spaces", () => {
+    const long = "a".repeat(3999) + "\u{1f600}" + "b".repeat(100);
+    const t = appendText(EMPTY_TRANSCRIPT, "student", long, { atMs: 0 });
+    const pieces = build({ mode: "full", endedAt: START + 60_000, transcript: t }).turns.map((x) => x.text);
+    expect(pieces[0]).toBe("a".repeat(3999));
+    expect(pieces[1].startsWith("\u{1f600}")).toBe(true);
+  });
+
   it("caps an end time that is far too late for the mode", () => {
     const record = build({ endedAt: START + 3 * 60 * 60 * 1000 });
     expect(Date.parse(record.endedAt) - START).toBe(maxDurationMs("demo"));
@@ -162,6 +183,10 @@ describe("parseRecord", () => {
     ["a time after the viva ended", turn({ atMs: 50_000 }), "Turn 1: atMs must be within the viva and not before the previous turn."],
   ])("rejects %s", (_label, input, message) => {
     expect(parse(input)).toEqual({ error: message });
+  });
+
+  it("refuses huge raw text before cleaning it", () => {
+    expect(parse(turn({ text: "a" + "\u200b".repeat(10_000) }))).toEqual({ error: "Turn 1: text must be 1–4000 characters." });
   });
 
   it("rejects times that go backwards", () => {
