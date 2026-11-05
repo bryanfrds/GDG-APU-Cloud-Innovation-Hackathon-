@@ -2,12 +2,15 @@
 // The real GEMINI_API_KEY stays on the server.
 import { timingSafeEqual } from "node:crypto";
 import { GoogleGenAI, Modality } from "@google/genai";
+import { SESSION_GRACE_MS, TOKEN_START_WINDOW_MS, VIVA_MODEL } from "@/lib/viva/config";
 import {
-  EXAMINER_INSTRUCTIONS,
-  TOKEN_SESSION_MS,
-  TOKEN_START_WINDOW_MS,
-  VIVA_MODEL,
-} from "@/lib/viva/config";
+  buildExaminerInstructions,
+  MODE_SECONDS,
+  parseMode,
+  parsePlan,
+  SAMPLE_PLAN,
+  VIVA_TOOLS,
+} from "@/lib/viva/plan";
 import { createRateLimiter } from "@/lib/viva/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +34,14 @@ export async function POST(req: Request) {
     return Response.json({ error: "Too many vivas started. Wait a minute and try again." }, { status: 429 });
   }
 
+  // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
+  // TODO(Person 1): take a submission id instead and load its questions from Firestore,
+  // so a student can't send their own questions.
+  const body = await req.json().catch(() => ({}));
+  const parsed = body?.plan === undefined ? { plan: SAMPLE_PLAN } : parsePlan(body.plan);
+  if ("error" in parsed) return Response.json({ error: parsed.error }, { status: 400 });
+  const mode = parseMode(body?.mode);
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "Server is missing GEMINI_API_KEY" }, { status: 500 });
@@ -45,14 +56,15 @@ export async function POST(req: Request) {
       config: {
         uses: 1,
         newSessionExpireTime: new Date(now + TOKEN_START_WINDOW_MS).toISOString(),
-        expireTime: new Date(now + TOKEN_SESSION_MS).toISOString(),
+        expireTime: new Date(now + MODE_SECONDS[mode] * 1000 + SESSION_GRACE_MS).toISOString(),
         // Setting the constraints without lockAdditionalFields locks every Live
         // setting, so a pass can't be reused with other tools or settings.
         liveConnectConstraints: {
           model: VIVA_MODEL,
           config: {
             responseModalities: [Modality.AUDIO],
-            systemInstruction: EXAMINER_INSTRUCTIONS,
+            systemInstruction: buildExaminerInstructions(parsed.plan, mode),
+            tools: VIVA_TOOLS,
             inputAudioTranscription: {},
             outputAudioTranscription: {},
           },
@@ -61,7 +73,7 @@ export async function POST(req: Request) {
     });
 
     return Response.json(
-      { token: token.name, model: VIVA_MODEL },
+      { token: token.name, model: VIVA_MODEL, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err) {

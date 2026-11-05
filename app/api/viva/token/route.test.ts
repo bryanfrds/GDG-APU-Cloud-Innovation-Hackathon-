@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const create = vi.fn();
 vi.mock("@google/genai", () => ({
   Modality: { AUDIO: "AUDIO" },
+  Type: { OBJECT: "OBJECT", STRING: "STRING" },
   GoogleGenAI: class {
     authTokens = { create };
   },
@@ -15,8 +16,12 @@ async function loadRoute() {
   return import("./route");
 }
 
-function request(headers: Record<string, string> = {}) {
-  return new Request("http://localhost/api/viva/token", { method: "POST", headers });
+function request(headers: Record<string, string> = {}, body?: unknown) {
+  return new Request("http://localhost/api/viva/token", {
+    method: "POST",
+    headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
 describe("POST /api/viva/token", () => {
@@ -33,7 +38,7 @@ describe("POST /api/viva/token", () => {
     const res = await POST(request());
     const text = await res.text();
     expect(res.status).toBe(200);
-    expect(JSON.parse(text)).toEqual({ token: "auth_tokens/abc123", model: expect.any(String) });
+    expect(JSON.parse(text)).toMatchObject({ token: "auth_tokens/abc123", model: expect.any(String), mode: "full", seconds: 300 });
     expect(text).not.toContain(FAKE_KEY);
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
@@ -45,7 +50,43 @@ describe("POST /api/viva/token", () => {
     expect(config.uses).toBe(1);
     expect(config.liveConnectConstraints.model).toMatch(/live/);
     expect(config.liveConnectConstraints.config.systemInstruction).toMatch(/examiner/i);
+    expect(config.liveConnectConstraints.config.tools[0].functionDeclarations.map((f: { name: string }) => f.name)).toEqual([
+      "start_question",
+      "end_viva",
+    ]);
     expect(config).not.toHaveProperty("lockAdditionalFields"); // omitted = lock everything
+  });
+
+  it("builds the instructions from the plan the page sends", async () => {
+    const { POST } = await loadRoute();
+    const plan = { assignmentTitle: "Hash tables", questions: [{ id: "h1", text: "How do you handle collisions?" }] };
+    const res = await POST(request({}, { plan, mode: "demo" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ mode: "demo", seconds: 30, plan });
+    const { config } = create.mock.calls[0][0];
+    const instructions = config.liveConnectConstraints.config.systemInstruction;
+    expect(instructions).toContain("[h1] How do you handle collisions?");
+    expect(instructions).toMatch(/30-second demo/);
+  });
+
+  it("makes the pass last only as long as the viva plus a short grace period", async () => {
+    vi.useFakeTimers({ now: new Date("2026-11-05T10:00:00Z") });
+    try {
+      const { POST } = await loadRoute();
+      await POST(request({}, { mode: "demo" }));
+      const { config } = create.mock.calls[0][0];
+      expect(config.expireTime).toBe("2026-11-05T10:02:30.000Z"); // 30 s viva + 2 min grace
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a bad plan without asking Gemini", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(request({}, { plan: { assignmentTitle: "x", questions: [] } }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/at least one question/);
+    expect(create).not.toHaveBeenCalled();
   });
 
   describe("with DEMO_PASSCODE set", () => {
