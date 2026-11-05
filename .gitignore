@@ -4,6 +4,8 @@
 *service-account*.json
 *-key.json
 secrets/
+.env.*
+
 
 # Dependencies and builds
 node_modules/
@@ -16,3 +18,13 @@ coverage/
 .DS_Store
 .vscode/
 .idea/
+
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Uploaded assignments
+backend/uploads/
+
