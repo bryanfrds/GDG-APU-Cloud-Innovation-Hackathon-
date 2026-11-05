@@ -58,6 +58,16 @@ Hidden characters are stripped from turn text, and line breaks become spaces.
   It refuses (404) a `vivaId` this server never issued. It needs the demo passcode when
   `DEMO_PASSCODE` is set, and is rate-limited.
 - **Storage is JSON files under `VIVA_DATA_DIR` (default `.data/vivas`, git-ignored).** That's fine
-  locally. On Cloud Run the disk is wiped on every restart, so swap `lib/viva/store.ts` for
-  Firestore before relying on it there. Nothing else needs to change.
+  locally. On Cloud Run it needs care until `lib/viva/store.ts` is swapped for Firestore:
+  - **Run one instance** (`--max-instances=1`). Otherwise the save can land on a different copy of
+    the server from the one that wrote the session, get a 404, and the record is lost.
+  - **Set `VIVA_DATA_DIR=/tmp/vivas`**, which is always writable. If the session can't be written,
+    the viva still starts, but `/api/viva/token` returns `canSave: false` and that viva can't be saved.
+  - **Records don't last.** Cloud Run wipes the disk when an idle copy shuts down, so read records for
+    scoring soon after, or move to Firestore.
+  - The Firestore version must keep the plan comparison (`samePlan()`, field by field) and the
+    save-once rule. The routes don't need to change.
+- An identical retry of a save (for example after a lost response) gets 200 with `alreadySaved: true`.
+  A different record for an already-saved viva gets 409.
+- The browser's clock may be up to 10 minutes off from the server's before its times are refused.
 - Scoring reads a saved record with `getRecord(vivaId)` from `lib/viva/store.ts`.
