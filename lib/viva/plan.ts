@@ -48,9 +48,18 @@ const LIMITS = { title: 120, questions: 4, text: 400, focus: 300 };
 
 // Line breaks, tabs and other control characters could make question text look
 // like new rules in the examiner's instructions, so they're never allowed.
-// Also blocks invisible characters that can hide or reorder text: the old NEL line break,
-// zero-width characters and right-to-left controls.
-const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/;
+// Also blocks invisible characters that can hide or reorder text: every control (Cc) and
+// format (Cf) character, which covers zero-width spaces, right-to-left controls, the soft
+// hyphen and the "tag" characters used to hide prompts, plus a few other invisible fillers.
+const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u3164\uffa0\u{e0100}-\u{e01ef}]/u;
+
+// Persian, Indian scripts and combined emoji (like 👩‍💻) need the zero-width (non-)joiner
+// between letters, marks or emoji. One joiner there is real text; runs of them are not.
+const REAL_JOINER = /(?<=[\p{L}\p{M}\p{Extended_Pictographic}])[\u200c\u200d](?![\u200c\u200d])/gu;
+
+function hasHiddenChars(text: string) {
+  return HIDDEN_CHARS.test(text.replace(REAL_JOINER, ""));
+}
 
 type FieldResult = { value: string } | { error: string };
 
@@ -61,7 +70,9 @@ function cleanText(value: unknown, label: string, max: number, optional = false)
   const trimmed = value.trim();
   if (!trimmed) return optional ? null : { error: `${label} is empty.` };
   if (trimmed.length > max) return { error: `${label} is too long (at most ${max} characters).` };
-  if (CONTROL_CHARS.test(trimmed)) return { error: `${label} must be a single line of plain text.` };
+  if (hasHiddenChars(trimmed)) {
+    return { error: `${label} must be a single line of plain text (no line breaks or hidden characters).` };
+  }
   return { value: trimmed };
 }
 
