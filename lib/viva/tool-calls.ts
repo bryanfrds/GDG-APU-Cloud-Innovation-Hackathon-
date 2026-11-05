@@ -5,6 +5,8 @@ import type { FunctionCall, FunctionResponse } from "@google/genai";
 export type VivaEvents = {
   onStartQuestion: (questionId: string) => void;
   onEndViva: (reason: string) => void;
+  /** The plan's question ids. When given, an id outside the plan gets an error reply. */
+  knownQuestionIds?: string[];
 };
 
 /** Handles every call and returns one reply per call, so the examiner never waits forever. */
@@ -12,9 +14,14 @@ export function answerToolCalls(calls: FunctionCall[] | undefined, events: VivaE
   return (calls ?? []).map((call) => {
     const args = (call.args ?? {}) as Record<string, unknown>;
     if (call.name === "start_question") {
-      const id = typeof args.question_id === "string" ? args.question_id : "";
-      if (id) events.onStartQuestion(id);
-      return { id: call.id, name: call.name, response: id ? { ok: true } : { error: "question_id is missing" } };
+      const id = typeof args.question_id === "string" ? args.question_id.trim() : "";
+      if (!id) return { id: call.id, name: call.name, response: { error: "question_id is missing" } };
+      const known = events.knownQuestionIds;
+      if (known && !known.includes(id)) {
+        return { id: call.id, name: call.name, response: { error: `No question "${id}". Use one of: ${known.join(", ")}` } };
+      }
+      events.onStartQuestion(id);
+      return { id: call.id, name: call.name, response: { ok: true } };
     }
     if (call.name === "end_viva") {
       events.onEndViva(typeof args.reason === "string" ? args.reason : "other");
