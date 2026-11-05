@@ -52,6 +52,15 @@ describe("POST /api/viva/token", () => {
     expect(session).toMatchObject({ vivaId: body.vivaId, plan, mode: "demo" });
   });
 
+  it("still starts the viva when its session can't be saved, and says it can't be saved", async () => {
+    vi.stubEnv("VIVA_DATA_DIR", "/dev/null/cannot-write-here");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { POST } = await loadRoute();
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ token: "auth_tokens/abc123", canSave: false });
+  });
+
   it("doesn't remember a viva when Gemini refuses the pass", async () => {
     create.mockRejectedValue(new Error("nope"));
     vi.spyOn(console, "error").mockImplementation(() => {});

@@ -24,11 +24,12 @@ const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 const MAX_BODY_BYTES = 16_000;
 
 export async function POST(req: Request) {
-  if (!passcodeOk(req)) {
-    return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
-  }
+  // Rate limit first, so wrong passcode guesses are limited too.
   if (!limiter.allow(clientAddress(req))) {
     return Response.json({ error: "Too many vivas started. Wait a minute and try again." }, { status: 429 });
+  }
+  if (!passcodeOk(req)) {
+    return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
   }
 
   // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
@@ -80,16 +81,18 @@ export async function POST(req: Request) {
   }
 
   // Remember what this viva was locked to, so the saved record can be checked against it.
+  // If that fails (say the disk isn't writable), still let the viva happen; it just can't be saved.
   const vivaId = newVivaId();
+  let canSave = true;
   try {
     await saveSession({ vivaId, plan: parsed.plan, mode, issuedAt: new Date(now).toISOString() });
   } catch (err) {
-    console.error("Failed to save viva session", err);
-    return Response.json({ error: "Could not start the viva. Try again." }, { status: 500 });
+    console.error("Failed to save viva session; this viva can't be saved", err);
+    canSave = false;
   }
 
   return Response.json(
-    { token: token.name, model: VIVA_MODEL, vivaId, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
+    { token: token.name, model: VIVA_MODEL, vivaId, canSave, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
