@@ -62,5 +62,5 @@ Names go next to each person below once we've agreed who takes what.
 3. **8 Nov: lecturer side.** Reports and class stats (P3), report page and class view (P4).
 4. **9 Nov: demo ready.** Demo mode (P2), demo data and the two staged submissions (P3),
    polish and backup video (P4). Everyone: bug fixes.
-5. **10 Nov: submit.** Code freeze at 6 PM MYT. Bryan merges `dev` into `main`, final README,
-   pitch deck PDF, submit on the hackathon workspace. Everyone rehearses the demo.
+5. **10 Nov: submit.** Code freeze at 6 PM MYT. P4 finishes the README and pitch deck PDF.
+   Bryan merges `dev` into `main` and submits on the hackathon workspace. Everyone rehearses the demo.
