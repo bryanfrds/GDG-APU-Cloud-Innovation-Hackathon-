@@ -19,3 +19,10 @@ coverage/
 
 # Local test output
 tmp/
+
+# Next.js
+.next/
+*.tsbuildinfo
+next-env.d.ts
+# Written by `next dev` for AI coding tools; kept out of the repo on purpose
+AGENTS.md
