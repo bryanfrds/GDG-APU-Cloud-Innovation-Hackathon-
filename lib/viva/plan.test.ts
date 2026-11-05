@@ -164,6 +164,10 @@ describe("buildExaminerInstructions", () => {
     expect(text).toMatch(/don't know, accept it calmly/);
     expect(text).toMatch(/repeat or rephrase/);
     expect(text).toMatch(/not English fluency or accent/);
+    expect(text).toMatch(/stop talking and wait for the student/);
+    expect(text).toMatch(/Never answer your own question/);
+    expect(text).toMatch(/A typed answer counts the same/);
+    expect(text).toMatch(/Never say your reasoning/);
     expect(text).not.toMatch(/memoris/i);
     expect(text).toMatch(/about 5 minutes/);
     expect(text).toMatch(/at most two follow-ups per question/);
