@@ -3,8 +3,13 @@
 // student's words that arrive late still join their own line, not the examiner's.
 
 export type Speaker = "ai" | "student";
-/** `text` is what to show; `raw` is everything Gemini sent for the line, kept so cleanup can redo it. */
-export type Line = { who: Speaker; text: string; raw: string };
+/**
+ * `text` is what to show; `raw` is everything Gemini sent for the line, kept so cleanup can redo it.
+ * `questionId` is the question being asked when the line started, and `atMs` is when it started
+ * (milliseconds since the viva began). Both are set once, when the line is created.
+ */
+export type Line = { who: Speaker; text: string; raw: string; questionId: string | null; atMs: number };
+export type LineMeta = { questionId?: string | null; atMs?: number };
 export type Transcript = { lines: Line[]; open: Record<Speaker, number | null> };
 
 export const EMPTY_TRANSCRIPT: Transcript = { lines: [], open: { ai: null, student: null } };
@@ -25,20 +30,21 @@ export function cleanTranscriptText(text: string): string {
   return JUNK.reduce((s, pattern) => s.replace(pattern, ""), text).replace(/ {2,}/g, " ");
 }
 
-function line(who: Speaker, raw: string): Line {
-  return { who, raw, text: cleanTranscriptText(raw).trimStart() };
+function line(who: Speaker, raw: string, meta: { questionId: string | null; atMs: number }): Line {
+  return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta };
 }
 
-export function appendText(t: Transcript, who: Speaker, text: string): Transcript {
+export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta = {}): Transcript {
   if (!text) return t;
   const i = t.open[who];
   if (i !== null) {
     const lines = t.lines.slice();
-    lines[i] = line(who, lines[i].raw + text);
+    const { questionId, atMs } = lines[i];
+    lines[i] = line(who, lines[i].raw + text, { questionId, atMs });
     return { lines, open: t.open };
   }
   return {
-    lines: [...t.lines, line(who, text)],
+    lines: [...t.lines, line(who, text, { questionId: meta.questionId ?? null, atMs: meta.atMs ?? 0 })],
     open: { ...t.open, [who]: t.lines.length },
   };
 }
