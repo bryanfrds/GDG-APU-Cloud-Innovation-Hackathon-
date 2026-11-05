@@ -5,10 +5,10 @@
 
 export const VIVA_MODEL = process.env.LIVE_MODEL ?? "gemini-3.8-live";
 
-// How long a token can start a new viva, and how long a viva can run on it.
+// A pass must be used to connect within TOKEN_START_WINDOW_MS. After the viva's own
+// time limit, the connection may stay open SESSION_GRACE_MS longer so the examiner
+// can finish its last sentence. The pass expires after all three added together.
 export const TOKEN_START_WINDOW_MS = 60 * 1000; // must connect within 1 minute
-export const TOKEN_SESSION_MS = 10 * 60 * 1000; // a viva can last up to 10 minutes
+export const SESSION_GRACE_MS = 2 * 60 * 1000;
 
-export const EXAMINER_INSTRUCTIONS =
-  "You are an examiner running a short, friendly viva about a student's assignment. " +
-  "Ask one question at a time and keep each question short.";
+// The examiner's instructions are built per viva in lib/viva/plan.ts.
