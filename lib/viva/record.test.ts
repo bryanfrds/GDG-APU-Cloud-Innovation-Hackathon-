@@ -70,7 +70,7 @@ describe("buildRecord", () => {
   });
 
   it("leaves out lines that are empty after cleanup", () => {
-    const t = appendText(EMPTY_TRANSCRIPT, "ai", "\u{1F9E0}[en]", { atMs: 5 });
+    const t = appendText(EMPTY_TRANSCRIPT, "ai", "\u{1F9E0}[en]", { questionId: null, atMs: 5 });
     expect(build({ transcript: t }).turns).toEqual([]);
   });
 
@@ -96,9 +96,9 @@ describe("buildRecord", () => {
   });
 
   it("keeps times inside the viva and never going backwards", () => {
-    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Late", { atMs: 90_000 }); // after a 30 s demo ended
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Late", { questionId: null, atMs: 90_000 }); // after a 30 s demo ended
     t = closeTurn(t, "complete");
-    t = appendText(t, "student", "Earlier?", { atMs: 50 });
+    t = appendText(t, "student", "Earlier?", { questionId: null, atMs: 50 });
     const record = build({ transcript: t });
     expect(record.turns.map((x) => x.atMs)).toEqual([30_000, 30_000]);
     expect(roundTrip(record)).toHaveProperty("record");
@@ -108,9 +108,9 @@ describe("buildRecord", () => {
     for (let i = 0; i < 200; i++) {
       const startedAt = START + Math.random();
       const endedAt = startedAt + 1 + Math.random() * 29_000;
-      let tr = appendText(EMPTY_TRANSCRIPT, "ai", "Hi", { atMs: Math.random() * 40_000 });
+      let tr = appendText(EMPTY_TRANSCRIPT, "ai", "Hi", { questionId: null, atMs: Math.random() * 40_000 });
       tr = closeTurn(tr, "complete");
-      tr = appendText(tr, "student", "Hello", { atMs: Math.random() * 40_000 });
+      tr = appendText(tr, "student", "Hello", { questionId: null, atMs: Math.random() * 40_000 });
       const record = build({ startedAt, endedAt, transcript: tr });
       expect(record.turns.every((x) => Number.isInteger(x.atMs))).toBe(true);
       expect(roundTrip(record)).toHaveProperty("record");
@@ -119,7 +119,7 @@ describe("buildRecord", () => {
 
   it("never splits an emoji in half when a long answer has no spaces", () => {
     const long = "a".repeat(3999) + "\u{1f600}" + "b".repeat(100);
-    const t = appendText(EMPTY_TRANSCRIPT, "student", long, { atMs: 0 });
+    const t = appendText(EMPTY_TRANSCRIPT, "student", long, { questionId: null, atMs: 0 });
     const pieces = build({ mode: "full", endedAt: START + 60_000, transcript: t }).turns.map((x) => x.text);
     expect(pieces[0]).toBe("a".repeat(3999));
     expect(pieces[1].startsWith("\u{1f600}")).toBe(true);
@@ -132,7 +132,7 @@ describe("buildRecord", () => {
   });
 
   it("removes hidden characters from what was said, but keeps real joiners", () => {
-    const t = appendText(EMPTY_TRANSCRIPT, "student", "Line one\nline two\u{202e} and می\u{200c}خواهم", { atMs: 1 });
+    const t = appendText(EMPTY_TRANSCRIPT, "student", "Line one\nline two\u{202e} and می\u{200c}خواهم", { questionId: null, atMs: 1 });
     expect(build({ transcript: t }).turns[0].text).toBe("Line one line two and می\u{200c}خواهم");
   });
 });
@@ -179,8 +179,8 @@ describe("parseRecord", () => {
     ["empty text", turn({ text: " " }), "Turn 1: text must be 1–4000 characters."],
     ["text that's only hidden characters", turn({ text: "\u{200b}\u{202e}" }), "Turn 1: text must be 1–4000 characters."],
     ["a question not in the plan", turn({ questionId: "q9" }), 'Turn 1: question "q9" isn\'t in the plan.'],
-    ["a negative time", turn({ atMs: -5 }), "Turn 1: atMs must be within the viva and not before the previous turn."],
-    ["a time after the viva ended", turn({ atMs: 50_000 }), "Turn 1: atMs must be within the viva and not before the previous turn."],
+    ["a negative time", turn({ questionId: null, atMs: -5 }), "Turn 1: atMs must be within the viva and not before the previous turn."],
+    ["a time after the viva ended", turn({ questionId: null, atMs: 50_000 }), "Turn 1: atMs must be within the viva and not before the previous turn."],
   ])("rejects %s", (_label, input, message) => {
     expect(parse(input)).toEqual({ error: message });
   });

@@ -9,7 +9,8 @@ export type Speaker = "ai" | "student";
  * (milliseconds since the viva began). Both are set once, when the line is created.
  */
 export type Line = { who: Speaker; text: string; raw: string; questionId: string | null; atMs: number };
-export type LineMeta = { questionId?: string | null; atMs?: number };
+/** Required, so a caller can't forget to tag a line. */
+export type LineMeta = { questionId: string | null; atMs: number };
 export type Transcript = { lines: Line[]; open: Record<Speaker, number | null> };
 
 export const EMPTY_TRANSCRIPT: Transcript = { lines: [], open: { ai: null, student: null } };
@@ -34,7 +35,7 @@ function line(who: Speaker, raw: string, meta: { questionId: string | null; atMs
   return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta };
 }
 
-export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta = {}): Transcript {
+export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta): Transcript {
   if (!text) return t;
   const i = t.open[who];
   if (i !== null) {
@@ -44,7 +45,7 @@ export function appendText(t: Transcript, who: Speaker, text: string, meta: Line
     return { lines, open: t.open };
   }
   return {
-    lines: [...t.lines, line(who, text, { questionId: meta.questionId ?? null, atMs: meta.atMs ?? 0 })],
+    lines: [...t.lines, line(who, text, meta)],
     open: { ...t.open, [who]: t.lines.length },
   };
 }
