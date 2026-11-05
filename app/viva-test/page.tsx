@@ -7,13 +7,15 @@ import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
 import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
+import { SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
+import { answerToolCalls } from "@/lib/viva/tool-calls";
 
 type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
 
 const STEP_TIMEOUT_MS = 15000;
-const KICKOFF =
-  "The student is ready. Greet them in one sentence, then ask your first question " +
-  "about their sorting algorithms assignment.";
+const KICKOFF = "The student is ready. Begin the viva.";
+const TIME_UP =
+  "Time is up. Don't ask anything else: thank the student in one sentence, then call end_viva.";
 
 export default function VivaTestPage() {
   const [status, setStatus] = useState<Status>("idle");
@@ -21,6 +23,10 @@ export default function VivaTestPage() {
   const [transcript, setTranscript] = useState<Transcript>(EMPTY_TRANSCRIPT);
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [passcode, setPasscode] = useState("");
+  const [mode, setMode] = useState<VivaMode>("full");
+  const [plan, setPlan] = useState<VivaPlan | null>(null);
+  const [questionId, setQuestionId] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
 
   const sessionRef = useRef<Session | null>(null);
   const micRef = useRef<MicCapture | null>(null);
@@ -31,36 +37,23 @@ export default function VivaTestPage() {
   // Set when Gemini has warned it will close the connection (goAway), so the
   // close that follows is expected and isn't reported as an error.
   const closingRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Clean up the mic and connection if the page is closed mid-viva.
   useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleMessage(msg: LiveServerMessage) {
     if (msg.goAway) {
-      // Gemini warns that it will close the connection soon. Stop listening,
-      // let the examiner finish its sentence, then end cleanly.
-      micRef.current?.stop();
-      micRef.current = null;
-      closingRef.current = true;
-      setStatus("closing");
-      const attempt = attemptRef.current;
-      const finish = () => {
-        if (attemptRef.current !== attempt) return; // already ended, or a new viva started
-        endWithNotice("The session is ending, so the viva has stopped here.");
-      };
-      if (playerRef.current?.isPlaying()) playerRef.current.whenIdle(finish);
-      else finish();
-      setTimeout(finish, 8000); // in case the audio never reports that it finished
+      // Gemini warns that it will close the connection soon.
+      wrapUp("The session is ending, so the viva has stopped here.");
       return;
     }
     if (msg.toolCall) {
-      // The examiner reports progress (start_question, end_viva) and waits for a
-      // reply before it carries on, so always answer. Showing progress comes next.
-      const functionResponses = (msg.toolCall.functionCalls ?? []).map((call) => ({
-        id: call.id,
-        name: call.name,
-        response: { ok: true },
-      }));
+      // The examiner reports progress and waits for a reply before it carries on.
+      const functionResponses = answerToolCalls(msg.toolCall.functionCalls, {
+        onStartQuestion: setQuestionId,
+        onEndViva: () => wrapUp("Viva complete. Thank you!"),
+      });
       sessionRef.current?.sendToolResponse({ functionResponses });
       return;
     }
@@ -102,6 +95,9 @@ export default function VivaTestPage() {
     setError("");
     setTranscript(EMPTY_TRANSCRIPT);
     setAiSpeaking(false);
+    setPlan(null);
+    setQuestionId(null);
+    setSecondsLeft(null);
     setStatus("starting");
 
     // Must be created inside the click so the browser lets it make sound.
@@ -122,7 +118,9 @@ export default function VivaTestPage() {
 
       const res = await fetch("/api/viva/token", {
         method: "POST",
-        headers: passcode ? { "x-demo-code": passcode } : {},
+        headers: { "content-type": "application/json", ...(passcode ? { "x-demo-code": passcode } : {}) },
+        // TODO(Person 1): send the submission id instead, once questions come from the real work.
+        body: JSON.stringify({ plan: SAMPLE_PLAN, mode }),
         signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
       });
       const body = await res.json().catch(() => ({}));
@@ -157,11 +155,65 @@ export default function VivaTestPage() {
       if (!current()) return;
       sessionRef.current = session;
 
+      setPlan(body.plan);
       setStatus("live");
+      startTimer(Number(body.seconds) || 300, attempt);
       session.sendClientContent({ turns: KICKOFF, turnComplete: true });
     } catch (err) {
       if (current()) fail(describeError(err));
     }
+  }
+
+  /** Counts down the viva's time limit; when it runs out, the examiner wraps up. */
+  function startTimer(seconds: number, attempt: number) {
+    const deadline = Date.now() + seconds * 1000;
+    setSecondsLeft(seconds);
+    timerRef.current = setInterval(() => {
+      if (attemptRef.current !== attempt) return stopTimer();
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left === 0) {
+        stopTimer();
+        sessionRef.current?.sendClientContent({ turns: TIME_UP, turnComplete: true });
+        // Give the examiner a moment to start its closing sentence before checking it has finished.
+        wrapUp("Time's up. The viva has ended.", 4000);
+      }
+    }, 250);
+  }
+
+  function stopTimer() {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+  }
+
+  /**
+   * Ends the viva gracefully: stop listening, let the examiner finish speaking,
+   * then show the notice. Waits until no audio has played for a moment, with a
+   * backstop in case audio never reports that it finished.
+   */
+  function wrapUp(notice: string, firstCheckMs = 1500, backstopMs = 15000) {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    micRef.current?.stop();
+    micRef.current = null;
+    stopTimer();
+    setStatus("closing");
+
+    const attempt = attemptRef.current;
+    let done = false;
+    const finish = () => {
+      if (done || attemptRef.current !== attempt) return; // already ended, or a new viva started
+      done = true;
+      endWithNotice(notice);
+    };
+    const settle = () => {
+      if (done || attemptRef.current !== attempt) return;
+      const player = playerRef.current;
+      if (player?.isPlaying()) player.whenIdle(() => setTimeout(settle, 1500));
+      else finish();
+    };
+    setTimeout(settle, firstCheckMs);
+    setTimeout(finish, backstopMs);
   }
 
   function fail(message: string) {
@@ -189,6 +241,7 @@ export default function VivaTestPage() {
   function teardown() {
     attemptRef.current++;
     closingRef.current = false;
+    stopTimer();
     micRef.current?.stop();
     micRef.current = null;
     const session = sessionRef.current;
@@ -199,6 +252,8 @@ export default function VivaTestPage() {
   }
 
   const running = status === "live" || status === "starting" || status === "closing";
+  const questionIndex = plan && questionId ? plan.questions.findIndex((q) => q.id === questionId) : -1;
+  const question = questionIndex >= 0 ? plan!.questions[questionIndex] : null;
   const lines = transcript.lines;
 
   return (
@@ -220,6 +275,16 @@ export default function VivaTestPage() {
         />
       </label>
 
+      <fieldset style={styles.fieldset} disabled={running}>
+        <legend>Length</legend>
+        <label>
+          <input type="radio" name="mode" checked={mode === "full"} onChange={() => setMode("full")} /> Full viva (5 min)
+        </label>{" "}
+        <label>
+          <input type="radio" name="mode" checked={mode === "demo"} onChange={() => setMode("demo")} /> Demo (30 s)
+        </label>
+      </fieldset>
+
       {running ? (
         <button onClick={stop} style={styles.button}>
           {status === "starting" ? "Cancel" : "End viva"}
@@ -233,6 +298,27 @@ export default function VivaTestPage() {
       <p data-testid="status" aria-live="polite" style={{ margin: "12px 0" }}>
         <strong>{statusLabel(status, aiSpeaking)}</strong>
       </p>
+      {plan && (status === "live" || status === "closing") && (
+        <div data-testid="progress" style={styles.progress}>
+          <span>
+            {question ? (
+              <>
+                <strong>
+                  Question {questionIndex + 1} of {plan.questions.length}:
+                </strong>{" "}
+                {question.text}
+              </>
+            ) : (
+              plan.assignmentTitle
+            )}
+          </span>
+          {secondsLeft !== null && (
+            <span data-testid="timer" aria-label={`${secondsLeft} seconds left`} style={{ whiteSpace: "nowrap" }}>
+              {formatTime(secondsLeft)} left
+            </span>
+          )}
+        </div>
+      )}
       {error && (
         <p role="alert" style={{ color: status === "error" ? "#b00020" : "#555" }}>
           {error}
@@ -269,6 +355,10 @@ function statusLabel(status: Status, aiSpeaking: boolean) {
   }
 }
 
+function formatTime(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function describeError(err: unknown): string {
   if (err instanceof DOMException) {
     if (err.name === "NotAllowedError") return "Microphone access was blocked. Allow it in your browser and try again.";
@@ -301,4 +391,16 @@ const styles = {
   button: { fontSize: 16, padding: "10px 18px", cursor: "pointer" },
   ai: { background: "#f2f2f2", padding: "8px 12px", borderRadius: 8 },
   student: { padding: "8px 12px" },
+  fieldset: { border: "1px solid #ddd", borderRadius: 8, margin: "0 0 12px", padding: "8px 12px" },
+  progress: {
+    display: "flex",
+    gap: 12,
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    background: "#f7f7f7",
+    border: "1px solid #e5e5e5",
+    borderRadius: 8,
+    padding: "8px 12px",
+    margin: "0 0 12px",
+  },
 } as const;
