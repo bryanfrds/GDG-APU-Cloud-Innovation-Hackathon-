@@ -26,3 +26,6 @@ tmp/
 next-env.d.ts
 # Written by `next dev` for AI coding tools; kept out of the repo on purpose
 AGENTS.md
+
+# Local viva data (sessions and saved records)
+.data/
