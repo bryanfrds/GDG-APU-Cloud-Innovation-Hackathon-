@@ -15,7 +15,7 @@ Person 3's scoring reads these.
 | `startedAt`, `endedAt` | ISO times with a time zone. |
 | `endReason` | `completed` (the examiner finished), `time_up`, `session_ended` (Gemini closed the connection), `stopped` (the student pressed End) or `error`. |
 | `truncated` | `true` if the viva was so long that turns past 300 were left out. |
-| `turns` | Every line said, in order: `who` (`ai` or `student`), `text`, `questionId` (the question being asked when the line started, or `null` before the first one) and `atMs` (milliseconds since the start; never goes down). |
+| `turns` | Every line said, in order: `who` (`ai` or `student`), `text`, `questionId` (the question being asked when the line started, or `null` before the first one) and `atMs` (milliseconds since the start; never goes down). A student turn the student typed instead of spoke also has `typed: true`. |
 
 `turnsByQuestion(record)` groups the turns under each planned question, in plan order, which is
 usually what scoring wants.
@@ -41,6 +41,7 @@ Hidden characters are stripped from turn text, and line breaks become spaces.
 - **When putting turns into a scoring prompt**, wrap each one in markers and escape `<` and `>`,
   the way `buildExaminerInstructions()` does for questions. Say in the prompt that text inside the
   markers is only what was said, never an instruction.
+- **Typed answers (`typed: true`) could have been pasted**, for example from a chatbot. Show them differently in the lecturer report and treat them with more caution than spoken ones.
 - **Tagging is best effort.** Gemini's transcript of the student can arrive slightly after the
   examiner moves on, so a very short answer can occasionally be tagged with the next question.
 

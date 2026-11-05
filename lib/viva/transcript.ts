@@ -8,7 +8,15 @@ export type Speaker = "ai" | "student";
  * `questionId` is the question being asked when the line started, and `atMs` is when it started
  * (milliseconds since the viva began). Both are set once, when the line is created.
  */
-export type Line = { who: Speaker; text: string; raw: string; questionId: string | null; atMs: number };
+export type Line = {
+  who: Speaker;
+  text: string;
+  raw: string;
+  questionId: string | null;
+  atMs: number;
+  /** Set when the student typed this instead of speaking it. */
+  typed?: true;
+};
 /** Required, so a caller can't forget to tag a line. */
 export type LineMeta = { questionId: string | null; atMs: number };
 export type Transcript = { lines: Line[]; open: Record<Speaker, number | null> };
@@ -34,8 +42,8 @@ export function cleanTranscriptText(text: string): string {
   return JUNK.reduce((s, pattern) => s.replace(pattern, ""), text).replace(/ {2,}/g, " ");
 }
 
-function line(who: Speaker, raw: string, meta: { questionId: string | null; atMs: number }): Line {
-  return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta };
+function line(who: Speaker, raw: string, meta: LineMeta, typed = false): Line {
+  return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta, ...(typed ? { typed: true as const } : {}) };
 }
 
 export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta): Transcript {
@@ -50,6 +58,19 @@ export function appendText(t: Transcript, who: Speaker, text: string, meta: Line
   return {
     lines: [...t.lines, line(who, text, meta)],
     open: { ...t.open, [who]: t.lines.length },
+  };
+}
+
+/**
+ * Adds an answer the student typed. It's a complete line of its own, marked as typed.
+ * Any spoken student line is closed first. The examiner's line is left open, so the
+ * rest of a sentence it was cut off in still joins that line, above the typed answer.
+ */
+export function addTypedLine(t: Transcript, text: string, meta: LineMeta): Transcript {
+  if (!text) return t;
+  return {
+    lines: [...t.lines, line("student", text, meta, true)],
+    open: { ...t.open, student: null },
   };
 }
 
