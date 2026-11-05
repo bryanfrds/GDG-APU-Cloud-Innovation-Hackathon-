@@ -7,7 +7,10 @@ class FakeSource {
   onended: (() => void) | null = null;
   startedAt = -1;
   stopped = false;
-  connect() {}
+  connectedTo: unknown = null;
+  connect(to: unknown) {
+    this.connectedTo = to;
+  }
   start(t: number) {
     this.startedAt = t;
   }
@@ -31,6 +34,12 @@ class FakeAudioContext {
   }
   createBuffer(_channels: number, length: number, rate: number) {
     return { duration: length / rate, getChannelData: () => new Float32Array(length) };
+  }
+  gains: { gain: { value: number }; connectedTo: unknown }[] = [];
+  createGain() {
+    const g = { gain: { value: 1 }, connectedTo: null as unknown, connect(to: unknown) { g.connectedTo = to; } };
+    this.gains.push(g);
+    return g;
   }
   createBufferSource() {
     const s = new FakeSource();
@@ -124,6 +133,29 @@ describe("VoicePlayer", () => {
     FakeAudioContext.last.sources[1].end();
     expect(done).toHaveBeenCalledTimes(1); // one-off
     expect(onIdle).toHaveBeenCalledTimes(2);
+  });
+
+  it("plays every chunk through one volume control that can be muted", () => {
+    const player = new VoicePlayer();
+    const ctx = FakeAudioContext.last;
+    const [volume] = ctx.gains;
+    expect(volume.connectedTo).toBe(ctx.destination);
+    player.play(chunk(0.5));
+    expect(ctx.sources[0].connectedTo).toBe(volume);
+    player.setMuted(true);
+    expect(volume.gain.value).toBe(0);
+    player.setMuted(false);
+    expect(volume.gain.value).toBe(1);
+  });
+
+  it("still reports speaking and idle while muted, so the ending works", () => {
+    const onIdle = vi.fn();
+    const player = new VoicePlayer(onIdle);
+    player.setMuted(true);
+    player.play(chunk(0.5));
+    expect(player.isPlaying()).toBe(true);
+    FakeAudioContext.last.sources[0].end();
+    expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
   it("ignores empty chunks", () => {
