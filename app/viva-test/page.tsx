@@ -11,13 +11,11 @@ import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/
 import { MODE_SECONDS, SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
 import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
-import { buildRecord, type EndReason, type VivaRecord } from "@/lib/viva/record";
+import type { EndReason, VivaRecord } from "@/lib/viva/record";
 import { recordFileName, sendRecord } from "@/lib/viva/save";
+import { createVivaFinisher, IDLE_STATE, type Finisher, type FinisherState, type SaveState } from "@/lib/viva/finisher";
 
 type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
-type SaveState = "idle" | "saving" | "saved" | "failed" | "off";
-/** What the server told us about this viva when it issued the pass. */
-type LiveViva = { vivaId: string; canSave: boolean; mode: VivaMode; plan: VivaPlan; startedAt: number };
 
 const STEP_TIMEOUT_MS = 15000;
 const KICKOFF = "The student is ready. Begin the viva.";
@@ -34,9 +32,7 @@ export default function VivaTestPage() {
   const [plan, setPlan] = useState<VivaPlan | null>(null);
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
-  const [record, setRecord] = useState<VivaRecord | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [saveError, setSaveError] = useState<{ message: string; canRetry: boolean } | null>(null);
+  const [finished, setFinished] = useState<FinisherState>(IDLE_STATE);
 
   const sessionRef = useRef<Session | null>(null);
   const planRef = useRef<VivaPlan | null>(null);
@@ -50,14 +46,28 @@ export default function VivaTestPage() {
   const endingRef = useRef<Ending | null>(null);
   const stopCountdownRef = useRef<(() => void) | null>(null);
   // Refs, not state, so tags and the saved record are current inside event handlers.
-  const vivaRef = useRef<LiveViva | null>(null);
+  const startedAtRef = useRef(0);
   const questionIdRef = useRef<string | null>(null);
   const transcriptRef = useRef<Transcript>(EMPTY_TRANSCRIPT);
-  const endReasonRef = useRef<EndReason>("completed");
-  const saveAttemptRef = useRef(0);
+  const passcodeRef = useRef("");
+  passcodeRef.current = passcode;
+  // Builds and saves each viva's record once, with the right end reason (lib/viva/finisher.ts).
+  const finisherRef = useRef<Finisher | null>(null);
+  finisherRef.current ??= createVivaFinisher({
+    save: (record) => sendRecord(record, passcodeRef.current),
+    onState: setFinished,
+  });
+  const finisher = finisherRef.current;
 
   // Clean up the mic and connection if the page is closed mid-viva.
-  useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Closing the page mid-viva doesn't save it: there's no reliable moment to send it.
+  useEffect(
+    () => () => {
+      finisherRef.current?.reset();
+      teardown();
+    },
+    [], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   function handleMessage(msg: LiveServerMessage) {
     if (msg.goAway) {
@@ -99,8 +109,7 @@ export default function VivaTestPage() {
     const said = content.outputTranscription?.text;
     if (heard || said || content.turnComplete || content.interrupted) {
       // Tag new lines with the question being asked now and the time since the viva began.
-      const startedAt = vivaRef.current?.startedAt ?? Date.now();
-      const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAt };
+      const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAtRef.current };
       let next = transcriptRef.current;
       if (heard) next = appendText(next, "student", heard, meta);
       if (said) next = appendText(next, "ai", said, meta);
@@ -119,9 +128,8 @@ export default function VivaTestPage() {
     setError("");
     transcriptRef.current = EMPTY_TRANSCRIPT;
     setTranscript(EMPTY_TRANSCRIPT);
-    setRecord(null);
-    setSaveState("idle");
-    setSaveError(null);
+    finisher.reset();
+    setFinished(IDLE_STATE);
     setAiSpeaking(false);
     setPlan(null);
     setQuestionId(null);
@@ -137,7 +145,8 @@ export default function VivaTestPage() {
     endingRef.current = createEnding({
       isPlaying: () => player.isPlaying(),
       onFinish: (notice) => {
-        if (current()) endWithNotice(notice, endReasonRef.current);
+        // The finisher already knows why it's wrapping up, so the reason here is only a fallback.
+        if (current()) endWithNotice(notice, "completed");
       },
     });
 
@@ -190,13 +199,16 @@ export default function VivaTestPage() {
       sessionRef.current = session;
 
       planRef.current = body.plan;
-      vivaRef.current = {
-        vivaId: body.vivaId,
-        canSave: body.canSave !== false && typeof body.vivaId === "string",
+      startedAtRef.current = Date.now();
+      const hasId = typeof body.vivaId === "string";
+      finisher.begin({
+        // Without a server id the record can still be downloaded, under a local one.
+        vivaId: hasId ? body.vivaId : `unsaved_${startedAtRef.current.toString(36)}`,
+        canSave: hasId && body.canSave !== false,
         mode: body.mode === "demo" ? "demo" : "full",
         plan: body.plan,
-        startedAt: Date.now(),
-      };
+        startedAt: startedAtRef.current,
+      });
       setPlan(body.plan);
       setStatus("live");
       stopCountdownRef.current = startCountdown(Number(body.seconds) || MODE_SECONDS[mode], setSecondsLeft, timeUp);
@@ -219,7 +231,7 @@ export default function VivaTestPage() {
   /** Ends the viva gracefully: stop listening, then let the examiner finish speaking. */
   function wrapUp(notice: string, reason: EndReason, opts?: { waitForSpeech?: boolean }) {
     if (!endingRef.current?.wrapUp(notice, opts)) return; // already ending
-    endReasonRef.current = reason;
+    finisher.wrappingUp(reason);
     stopListening();
     setStatus("closing");
   }
@@ -232,7 +244,7 @@ export default function VivaTestPage() {
   }
 
   function fail(message: string) {
-    finishViva("error");
+    finisher.finish("error", transcriptRef.current);
     teardown();
     setError(message);
     setStatus("error");
@@ -240,7 +252,7 @@ export default function VivaTestPage() {
   }
 
   function endWithNotice(message: string, reason: EndReason) {
-    finishViva(reason);
+    finisher.finish(reason, transcriptRef.current);
     teardown();
     setError(message);
     setStatus("ended");
@@ -249,43 +261,11 @@ export default function VivaTestPage() {
 
   function stop() {
     const wasStarting = status === "starting";
-    finishViva("stopped");
+    // If the examiner was already saying goodbye, the finisher keeps that reason instead.
+    finisher.finish("stopped", transcriptRef.current);
     teardown();
     setStatus(wasStarting ? "cancelled" : "ended");
     setAiSpeaking(false);
-  }
-
-  /** If a viva was under way, turn its transcript into a record and save it. */
-  function finishViva(reason: EndReason) {
-    const viva = vivaRef.current;
-    vivaRef.current = null; // only once per viva
-    if (!viva) return;
-    const built = buildRecord({
-      vivaId: viva.vivaId,
-      mode: viva.mode,
-      plan: viva.plan,
-      startedAt: viva.startedAt,
-      endedAt: Date.now(),
-      endReason: reason,
-      transcript: transcriptRef.current,
-    });
-    setRecord(built);
-    if (viva.canSave) void save(built);
-    else setSaveState("off");
-  }
-
-  async function save(toSave: VivaRecord) {
-    const attempt = ++saveAttemptRef.current;
-    setSaveState("saving");
-    setSaveError(null);
-    const result = await sendRecord(toSave, passcode);
-    if (attempt !== saveAttemptRef.current) return; // a newer save or viva took over
-    if (result.ok) {
-      setSaveState("saved");
-    } else {
-      setSaveState("failed");
-      setSaveError({ message: result.error, canRetry: result.canRetry });
-    }
   }
 
   function download(toSave: VivaRecord) {
@@ -293,8 +273,11 @@ export default function VivaTestPage() {
     const a = document.createElement("a");
     a.href = url;
     a.download = recordFileName(toSave);
+    // Older Safari and Firefox only download from a link that's on the page.
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   /** Stops everything from the current attempt and marks it as finished. */
@@ -303,9 +286,7 @@ export default function VivaTestPage() {
     endingRef.current?.cancel();
     endingRef.current = null;
     planRef.current = null;
-    vivaRef.current = null;
     questionIdRef.current = null;
-    endReasonRef.current = "completed";
     stopListening();
     const session = sessionRef.current;
     sessionRef.current = null;
@@ -318,6 +299,7 @@ export default function VivaTestPage() {
   const questionIndex = plan && questionId ? plan.questions.findIndex((q) => q.id === questionId) : -1;
   const question = questionIndex >= 0 ? plan!.questions[questionIndex] : null;
   const lines = transcript.lines;
+  const { record, saveState, saveError } = finished;
 
   return (
     <main style={styles.main}>
@@ -396,7 +378,7 @@ export default function VivaTestPage() {
           </span>
           <span style={{ display: "flex", gap: 8 }}>
             {saveState === "failed" && saveError?.canRetry && (
-              <button onClick={() => save(record)}>Try saving again</button>
+              <button onClick={() => finisher.retry()}>Try saving again</button>
             )}
             <button onClick={() => download(record)}>Download transcript</button>
           </span>
