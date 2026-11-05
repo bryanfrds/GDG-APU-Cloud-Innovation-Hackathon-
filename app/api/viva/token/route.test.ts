@@ -48,6 +48,7 @@ describe("POST /api/viva/token", () => {
     const plan = { assignmentTitle: "Hash tables", questions: [{ id: "h1", text: "How do you handle collisions?" }] };
     const body = await (await POST(request({}, { plan, mode: "demo" }))).json();
     expect(body.vivaId).toMatch(/^viva_[0-9a-f]{24}$/);
+    expect(body.canSave).toBe(true);
     const session = JSON.parse(readFileSync(path.join(dataDir, `${body.vivaId}.session.json`), "utf8"));
     expect(session).toMatchObject({ vivaId: body.vivaId, plan, mode: "demo" });
   });
@@ -196,6 +197,15 @@ describe("POST /api/viva/token", () => {
     const res = await POST(request());
     expect(res.status).toBe(502);
     expect(await res.text()).not.toContain("quota");
+  });
+
+  it("limits wrong passcode guesses too", async () => {
+    vi.stubEnv("DEMO_PASSCODE", "letmein");
+    const { POST } = await loadRoute();
+    const from = { "x-forwarded-for": "9.9.9.9", "x-demo-code": "guess" };
+    for (let i = 0; i < 10; i++) expect((await POST(request(from))).status).toBe(401);
+    expect((await POST(request(from))).status).toBe(429);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("limits one address to 10 passes a minute", async () => {

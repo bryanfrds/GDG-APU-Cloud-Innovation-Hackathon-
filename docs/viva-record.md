@@ -65,8 +65,13 @@ Hidden characters are stripped from turn text, and line breaks become spaces.
     the viva still starts, but `/api/viva/token` returns `canSave: false` and that viva can't be saved.
   - **Records don't last.** Cloud Run wipes the disk when an idle copy shuts down, so read records for
     scoring soon after, or move to Firestore.
+  - The file store saves a record by writing a temporary file and hard-linking it into place, so the
+    disk must support hard links. Local disks and Cloud Run's `/tmp` do; a mounted bucket folder may
+    not, and then every save fails.
   - The Firestore version must keep the plan comparison (`samePlan()`, field by field) and the
-    save-once rule. The routes don't need to change.
+    save-once rule. The routes don't need to change, but the identical-retry check in
+    `app/api/viva/records/route.ts` (`sameRecord()`) compares JSON text, so a store that returns
+    keys in another order turns identical retries into 409s. Compare field by field there too.
 - An identical retry of a save (for example after a lost response) gets 200 with `alreadySaved: true`.
   A different record for an already-saved viva gets 409.
 - The browser's clock may be up to 10 minutes off from the server's before its times are refused.
