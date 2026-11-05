@@ -48,6 +48,15 @@ describe("cleanTranscriptText", () => {
     expect(cleanTranscriptText("Okay. \u{1F9E0} [ms] Next")).toBe("Okay. Next");
   });
 
+  it("removes the markers Gemini writes while the student is silent", () => {
+    expect(cleanTranscriptText("<no speech>{pause}")).toBe("");
+    expect(cleanTranscriptText("Okay. <No Speech> {pause} Next one?")).toBe("Okay. Next one?");
+  });
+
+  it("keeps braces and the words 'no speech' in normal text", () => {
+    expect(cleanTranscriptText("I wrote {a, b} and there was no speech recognition")).toBe("I wrote {a, b} and there was no speech recognition");
+  });
+
   it("leaves normal text alone, including square brackets and angle brackets", () => {
     const text = "Use list[i], dict[key] and arr[idx] when i < n or x<y, and <already> is just a word here.";
     expect(cleanTranscriptText(text)).toBe(text);

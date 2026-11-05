@@ -24,6 +24,9 @@ const JUNK = [
   /\u{1F9E0}\s*(\[[a-z]{2,3}(?:-[a-z]{2,4})?\])?/giu,
   /\[[a-z]{2,3}(?:-[a-z]{2,4})?\]\s*(?=<already\b)/giu,
   /<already [a-z]{2,3}(?:-[a-z]{2,4})?>/giu,
+  // Markers it writes while the student is silent.
+  /<no speech>/giu,
+  /\{pause\}/giu,
 ];
 
 /** Removes Gemini's leaked tags from transcript text, and the extra spaces they leave. */
