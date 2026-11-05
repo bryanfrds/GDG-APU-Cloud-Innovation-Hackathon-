@@ -7,6 +7,10 @@ export type MicCapture = { stop: () => void };
 
 /** Starts the microphone and calls onChunk with base64 16 kHz PCM every ~100 ms. */
 export async function startMic(onChunk: (base64: string) => void): Promise<MicCapture> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    // Browsers only allow the mic on https:// (or localhost).
+    throw new DOMException("Microphone needs a secure (https) page", "InsecureContextError");
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
@@ -66,6 +70,20 @@ export class VoicePlayer {
     node.onended = () => {
       this.playing.delete(node);
       if (this.playing.size === 0) this.onIdle?.();
+    };
+  }
+
+  isPlaying() {
+    return this.playing.size > 0;
+  }
+
+  /** Runs `fn` once, when the audio already queued has finished playing. */
+  whenIdle(fn: () => void) {
+    const previous = this.onIdle;
+    this.onIdle = () => {
+      this.onIdle = previous;
+      previous?.();
+      fn();
     };
   }
 
