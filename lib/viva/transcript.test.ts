@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendText as appendTagged, cleanTranscriptText, closeTurn, EMPTY_TRANSCRIPT, type Speaker, type Transcript } from "./transcript";
+import { addTypedLine, appendText as appendTagged, cleanTranscriptText, closeTurn, EMPTY_TRANSCRIPT, type Speaker, type Transcript } from "./transcript";
 
 // These tests are about joining and cleaning text, so every line gets the same tag.
 const appendText = (t: Transcript, who: Speaker, text: string) => appendTagged(t, who, text, { questionId: null, atMs: 0 });
@@ -48,6 +48,15 @@ describe("cleanTranscriptText", () => {
     expect(cleanTranscriptText("Okay. \u{1F9E0} [ms] Next")).toBe("Okay. Next");
   });
 
+  it("removes the markers Gemini writes while the student is silent", () => {
+    expect(cleanTranscriptText("<no speech>{pause}")).toBe("");
+    expect(cleanTranscriptText("Okay. <No Speech> {pause} Next one?")).toBe("Okay. Next one?");
+  });
+
+  it("keeps braces and the words 'no speech' in normal text", () => {
+    expect(cleanTranscriptText("I wrote {a, b} and there was no speech recognition")).toBe("I wrote {a, b} and there was no speech recognition");
+  });
+
   it("leaves normal text alone, including square brackets and angle brackets", () => {
     const text = "Use list[i], dict[key] and arr[idx] when i < n or x<y, and <already> is just a word here.";
     expect(cleanTranscriptText(text)).toBe(text);
@@ -77,5 +86,37 @@ describe("appendText with leaked tags", () => {
     expect(t.lines[0].text).toBe("");
     t = appendText(t, "ai", " Hello");
     expect(t.lines[0].text).toBe("Hello");
+  });
+});
+
+describe("addTypedLine", () => {
+  const meta = { questionId: "q2", atMs: 9000 };
+
+  it("adds a complete student line marked as typed", () => {
+    const t = addTypedLine(EMPTY_TRANSCRIPT, "Merge sort", meta);
+    expect(t.lines).toEqual([{ who: "student", text: "Merge sort", raw: "Merge sort", questionId: "q2", atMs: 9000, typed: true }]);
+    expect(t.open.student).toBeNull();
+  });
+
+  it("closes a spoken student line first, so the two never merge", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "student", "I think");
+    t = addTypedLine(t, "Merge sort", meta);
+    t = appendText(t, "student", "and also");
+    expect(t.lines.map((l) => [l.text, l.typed ?? false])).toEqual([
+      ["I think", false],
+      ["Merge sort", true],
+      ["and also", false],
+    ]);
+  });
+
+  it("leaves the examiner's line open, so the rest of its cut-off sentence stays above the answer", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Which algorithm");
+    t = addTypedLine(t, "Merge sort", meta);
+    t = appendText(t, "ai", " did you use?");
+    expect(t.lines.map((l) => `${l.who}: ${l.text}`)).toEqual(["ai: Which algorithm did you use?", "student: Merge sort"]);
+  });
+
+  it("ignores an empty answer", () => {
+    expect(addTypedLine(EMPTY_TRANSCRIPT, "", meta)).toBe(EMPTY_TRANSCRIPT);
   });
 });

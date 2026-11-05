@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_PLAN, stripHiddenChars } from "./plan";
 import { buildRecord, maxDurationMs, parseRecord, turnsByQuestion, type VivaRecord } from "./record";
-import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "./transcript";
+import { addTypedLine, appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "./transcript";
 
 const START = Date.parse("2026-11-05T10:00:00Z");
 const NOW = START + 60 * 60 * 1000; // parseRecord's "now", an hour later
@@ -134,6 +134,23 @@ describe("buildRecord", () => {
   it("removes hidden characters from what was said, but keeps real joiners", () => {
     const t = appendText(EMPTY_TRANSCRIPT, "student", "Line one\nline two\u{202e} and می\u{200c}خواهم", { questionId: null, atMs: 1 });
     expect(build({ transcript: t }).turns[0].text).toBe("Line one line two and می\u{200c}خواهم");
+  });
+});
+
+describe("typed answers in the record", () => {
+  it("marks typed answers, and keeps that through the server check", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Which algorithm?", { questionId: "q1", atMs: 100 });
+    t = addTypedLine(t, "Merge sort", { questionId: "q1", atMs: 5000 });
+    const record = build({ transcript: t });
+    expect(record.turns.map((x) => x.typed ?? false)).toEqual([false, true]);
+    expect(roundTrip(record)).toEqual({ record });
+  });
+
+  it("only lets a student turn be marked typed, and only with true", () => {
+    const turn = (t: Record<string, unknown>) => ({ ...build(), turns: [{ who: "ai", text: "Hi", questionId: null, atMs: 0, ...t }] });
+    expect(parse(turn({ typed: true }))).toEqual({ error: "Turn 1: only a student turn can be marked typed." });
+    expect(parse(turn({ who: "student", typed: "yes" }))).toEqual({ error: "Turn 1: only a student turn can be marked typed." });
+    expect(parse(turn({ who: "student", typed: true }))).toHaveProperty("record.turns.0.typed", true);
   });
 });
 

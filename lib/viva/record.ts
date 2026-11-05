@@ -21,6 +21,8 @@ export type RecordTurn = {
   questionId: string | null;
   /** Milliseconds since the viva started. Never goes down from one turn to the next. */
   atMs: number;
+  /** Present (true) when the student typed this instead of speaking it. Typed answers could be pasted. */
+  typed?: true;
 };
 
 export type VivaRecord = {
@@ -72,7 +74,7 @@ export function buildRecord(input: {
     const atMs = Math.min(durationMs, Math.max(lastAt, Math.round(line.atMs)));
     lastAt = atMs;
     for (const piece of splitText(text, RECORD_LIMITS.text)) {
-      turns.push({ who: line.who, text: piece, questionId: line.questionId, atMs });
+      turns.push({ who: line.who, text: piece, questionId: line.questionId, atMs, ...(line.typed ? { typed: true as const } : {}) });
     }
   }
 
@@ -151,8 +153,11 @@ export function parseRecord(input: unknown, now = Date.now()): { record: VivaRec
   const turns: RecordTurn[] = [];
   let lastAt = 0;
   for (const [i, t] of r.turns.entries()) {
-    const { who, text, questionId, atMs } = (t ?? {}) as Record<string, unknown>;
+    const { who, text, questionId, atMs, typed } = (t ?? {}) as Record<string, unknown>;
     if (who !== "ai" && who !== "student") return { error: `Turn ${i + 1}: who must be ai or student.` };
+    if (typed !== undefined && !(typed === true && who === "student")) {
+      return { error: `Turn ${i + 1}: only a student turn can be marked typed.` };
+    }
     // Refuse huge raw text before cleaning it, so padding with hidden characters can't make us do lots of work.
     if (typeof text === "string" && text.length > RECORD_LIMITS.text * 2) {
       return { error: `Turn ${i + 1}: text must be 1–${RECORD_LIMITS.text} characters.` };
@@ -168,7 +173,7 @@ export function parseRecord(input: unknown, now = Date.now()): { record: VivaRec
       return { error: `Turn ${i + 1}: atMs must be within the viva and not before the previous turn.` };
     }
     lastAt = atMs;
-    turns.push({ who, text: clean, questionId, atMs: Math.round(atMs) });
+    turns.push({ who, text: clean, questionId, atMs: Math.round(atMs), ...(typed === true ? { typed: true as const } : {}) });
   }
 
   return {

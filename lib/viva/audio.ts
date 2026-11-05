@@ -47,11 +47,24 @@ export async function startMic(onChunk: (base64: string) => void): Promise<MicCa
 /** Plays the AI's audio chunks back to back, and can cut off instantly when the student interrupts. */
 export class VoicePlayer {
   private ctx = new AudioContext({ sampleRate: OUTPUT_RATE });
+  // Every chunk plays through this, so muting is one switch and timing is unaffected.
+  private volume = this.ctx.createGain();
   private nextStart = 0;
   private playing = new Set<AudioBufferSourceNode>();
 
   /** onIdle fires when the last queued audio finishes playing (not when Gemini finishes sending). */
-  constructor(private onIdle?: () => void) {}
+  constructor(private onIdle?: () => void) {
+    this.volume.connect(this.ctx.destination);
+  }
+
+  /**
+   * Mutes or unmutes the examiner's voice. Muted audio still "plays" silently, so
+   * "Examiner is speaking…" and the graceful ending keep working; the words still
+   * appear in the transcript.
+   */
+  setMuted(muted: boolean) {
+    this.volume.gain.value = muted ? 0 : 1;
+  }
 
   play(base64: string) {
     const pcm = new Int16Array(fromBase64(base64));
@@ -62,7 +75,7 @@ export class VoicePlayer {
 
     const node = this.ctx.createBufferSource();
     node.buffer = buffer;
-    node.connect(this.ctx.destination);
+    node.connect(this.volume);
     const startAt = Math.max(this.ctx.currentTime + 0.05, this.nextStart);
     node.start(startAt);
     this.nextStart = startAt + buffer.duration;
