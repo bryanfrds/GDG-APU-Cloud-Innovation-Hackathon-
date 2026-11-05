@@ -4,6 +4,8 @@
 *service-account*.json
 *-key.json
 secrets/
+.env.*
+
 
 # Dependencies and builds
 node_modules/
@@ -29,3 +31,12 @@ AGENTS.md
 
 # Local viva data (sessions and saved records)
 .data/
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Uploaded assignments
+backend/uploads/
+
