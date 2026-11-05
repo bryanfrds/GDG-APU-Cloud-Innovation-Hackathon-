@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { appendText, cleanTranscriptText, closeTurn, EMPTY_TRANSCRIPT } from "./transcript";
+import { appendText as appendTagged, cleanTranscriptText, closeTurn, EMPTY_TRANSCRIPT, type Speaker, type Transcript } from "./transcript";
+
+// These tests are about joining and cleaning text, so every line gets the same tag.
+const appendText = (t: Transcript, who: Speaker, text: string) => appendTagged(t, who, text, { questionId: null, atMs: 0 });
 
 const texts = (t: typeof EMPTY_TRANSCRIPT) => t.lines.map((l) => `${l.who}: ${l.text}`);
 
