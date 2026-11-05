@@ -5,8 +5,12 @@
 // That's fine on a laptop. On Cloud Run the disk is wiped on every restart, so
 // swap this for Firestore (Person 1's storage) before relying on it there; the
 // rest of the app only uses the functions below.
+//
+// Until then, on Cloud Run: run one instance (--max-instances=1) so the save lands
+// where the session was written, and set VIVA_DATA_DIR=/tmp/vivas (always writable).
+// TODO: nothing is ever deleted yet; old sessions and records pile up.
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { VivaMode, VivaPlan } from "./plan";
 import type { VivaRecord } from "./record";
@@ -71,12 +75,18 @@ export async function getRecord(vivaId: string): Promise<StoredRecord | null> {
 export async function saveRecordOnce(record: StoredRecord): Promise<boolean> {
   const file = fileFor(record.vivaId, "record");
   await mkdir(path.dirname(file), { recursive: true });
+  // Write the whole file under a temporary name first, so a crash never leaves half a
+  // record. Then link it into place: like "create", that fails if the record already
+  // exists, so two saves at once can't both win.
+  const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(tmp, JSON.stringify(record, null, 2), "utf8");
   try {
-    // "wx" fails if the file exists, so two saves at once can't both win.
-    await writeFile(file, JSON.stringify(record, null, 2), { encoding: "utf8", flag: "wx" });
+    await link(tmp, file);
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
     throw err;
+  } finally {
+    await unlink(tmp).catch(() => {});
   }
 }
