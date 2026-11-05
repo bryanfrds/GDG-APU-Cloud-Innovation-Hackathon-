@@ -8,7 +8,7 @@ import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@go
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
 import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
 
-type Status = "idle" | "starting" | "live" | "ended" | "error";
+type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
 
 const STEP_TIMEOUT_MS = 15000;
 const KICKOFF =
@@ -34,8 +34,19 @@ export default function VivaTestPage() {
 
   function handleMessage(msg: LiveServerMessage) {
     if (msg.goAway) {
-      // Gemini is about to end the connection (it caps session length).
-      endWithNotice("Time's up: the viva session reached its length limit.");
+      // Gemini warns that it will close the connection soon. Stop listening,
+      // let the examiner finish its sentence, then end cleanly.
+      micRef.current?.stop();
+      micRef.current = null;
+      setStatus("closing");
+      const attempt = attemptRef.current;
+      const finish = () => {
+        if (attemptRef.current !== attempt) return; // already ended, or a new viva started
+        endWithNotice("The session is ending, so the viva has stopped here.");
+      };
+      if (playerRef.current?.isPlaying()) playerRef.current.whenIdle(finish);
+      else finish();
+      setTimeout(finish, 8000); // in case the audio never reports that it finished
       return;
     }
     const content = msg.serverContent;
@@ -147,8 +158,9 @@ export default function VivaTestPage() {
   }
 
   function stop() {
+    const wasStarting = status === "starting";
     teardown();
-    setStatus("ended");
+    setStatus(wasStarting ? "cancelled" : "ended");
     setAiSpeaking(false);
   }
 
@@ -164,7 +176,7 @@ export default function VivaTestPage() {
     playerRef.current = null;
   }
 
-  const running = status === "live" || status === "starting";
+  const running = status === "live" || status === "starting" || status === "closing";
   const lines = transcript.lines;
 
   return (
@@ -196,7 +208,7 @@ export default function VivaTestPage() {
         </button>
       )}
 
-      <p data-testid="status" style={{ margin: "12px 0" }}>
+      <p data-testid="status" aria-live="polite" style={{ margin: "12px 0" }}>
         <strong>{statusLabel(status, aiSpeaking)}</strong>
       </p>
       {error && (
@@ -205,7 +217,7 @@ export default function VivaTestPage() {
         </p>
       )}
 
-      <section aria-live="polite" aria-label="Conversation" data-testid="transcript">
+      <section aria-label="Conversation" data-testid="transcript">
         {lines.map((line, i) => (
           <p key={i} style={line.who === "ai" ? styles.ai : styles.student}>
             <strong>{line.who === "ai" ? "Examiner" : "You"}:</strong> {line.text}
@@ -224,8 +236,12 @@ function statusLabel(status: Status, aiSpeaking: boolean) {
       return "Starting: allow the microphone if your browser asks…";
     case "live":
       return aiSpeaking ? "Examiner is speaking…" : "Listening…";
+    case "closing":
+      return "Wrapping up…";
     case "ended":
       return "Viva ended";
+    case "cancelled":
+      return "Cancelled";
     case "error":
       return "Something went wrong";
   }
@@ -235,6 +251,8 @@ function describeError(err: unknown): string {
   if (err instanceof DOMException) {
     if (err.name === "NotAllowedError") return "Microphone access was blocked. Allow it in your browser and try again.";
     if (err.name === "NotFoundError") return "No microphone was found. Plug one in and try again.";
+    if (err.name === "NotReadableError") return "Your microphone is being used by another app. Close it and try again.";
+    if (err.name === "InsecureContextError") return "The microphone only works on a secure (https) page.";
     if (err.name === "TimeoutError") return "The server took too long to respond. Try again.";
   }
   return err instanceof Error ? err.message : String(err);
