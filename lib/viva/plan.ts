@@ -61,6 +61,26 @@ function hasHiddenChars(text: string) {
   return HIDDEN_CHARS.test(text.replace(REAL_JOINER, ""));
 }
 
+const HIDDEN_CHARS_ALL = new RegExp(HIDDEN_CHARS.source, "gu");
+// Private-use stand-ins that protect real joiners while everything else hidden is removed.
+const KEEP_ZWNJ = "\u{F0001}";
+const KEEP_ZWJ = "\u{F0002}";
+
+/**
+ * For text we must keep rather than reject (what was said in a viva): line breaks and
+ * tabs become spaces, and other hidden characters are removed. Real joiners stay.
+ */
+export function stripHiddenChars(text: string): string {
+  return text
+    .replace(/[\u{F0001}\u{F0002}]/gu, "")
+    .replace(/[\r\n\t\u2028\u2029]+/g, " ")
+    .replace(REAL_JOINER, (j) => (j === "\u200c" ? KEEP_ZWNJ : KEEP_ZWJ))
+    .replace(HIDDEN_CHARS_ALL, "")
+    .replace(/\u{F0001}/gu, "\u200c")
+    .replace(/\u{F0002}/gu, "\u200d")
+    .replace(/ {2,}/g, " ");
+}
+
 type FieldResult = { value: string } | { error: string };
 
 /** Trims a text field, then checks it's present (unless optional), short enough, and on one line. */
