@@ -19,6 +19,3 @@ coverage/
 
 # Local test output
 tmp/
-*.tsbuildinfo
-next-env.d.ts
-AGENTS.md

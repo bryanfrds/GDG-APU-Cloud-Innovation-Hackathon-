@@ -4,9 +4,13 @@
   "type": "module",
   "scripts": {
     "viva:models": "node scripts/list-live-models.mjs",
-    "viva:hello": "node scripts/live-hello.mjs"
+    "viva:hello": "node scripts/live-hello.mjs",
+    "test": "node --test \"scripts/*.test.mjs\""
   },
   "dependencies": {
     "@google/genai": "^2.32.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -3,9 +3,15 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { wavHeader } from "./wav.mjs";
 
 const MODEL = process.env.LIVE_MODEL ?? "gemini-3.8-live";
 const SAMPLE_RATE = 24000; // Gemini Live speaks 24 kHz, 16-bit, mono PCM
+
+if (!process.env.GEMINI_API_KEY) {
+  console.error("GEMINI_API_KEY is not set. Run it with: kv run --env-file .env.local -- npm run viva:hello");
+  process.exit(1);
+}
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -13,6 +19,7 @@ const audioChunks = [];
 let spoken = "";
 
 const done = new Promise((resolve, reject) => {
+  setTimeout(() => reject(new Error("Timed out after 30 s waiting for a reply")), 30000).unref();
   ai.live
     .connect({
       model: MODEL,
@@ -52,26 +59,8 @@ await done;
 const pcm = Buffer.concat(audioChunks);
 mkdirSync("tmp", { recursive: true });
 const file = "tmp/live-hello.wav";
-writeFileSync(file, Buffer.concat([wavHeader(pcm.length), pcm]));
+writeFileSync(file, Buffer.concat([wavHeader(pcm.length, SAMPLE_RATE), pcm]));
 
 console.log(`\nAI said: ${spoken.trim()}`);
 console.log(`Saved ${(pcm.length / (SAMPLE_RATE * 2)).toFixed(1)}s of audio to ${file}`);
 if (process.platform === "darwin" && !process.env.NO_PLAY) execFileSync("afplay", [file]);
-
-function wavHeader(dataLength) {
-  const h = Buffer.alloc(44);
-  h.write("RIFF", 0);
-  h.writeUInt32LE(36 + dataLength, 4);
-  h.write("WAVE", 8);
-  h.write("fmt ", 12);
-  h.writeUInt32LE(16, 16); // fmt chunk size
-  h.writeUInt16LE(1, 20); // PCM
-  h.writeUInt16LE(1, 22); // mono
-  h.writeUInt32LE(SAMPLE_RATE, 24);
-  h.writeUInt32LE(SAMPLE_RATE * 2, 28); // bytes per second
-  h.writeUInt16LE(2, 32); // bytes per sample
-  h.writeUInt16LE(16, 34); // bits per sample
-  h.write("data", 36);
-  h.writeUInt32LE(dataLength, 40);
-  return h;
-}

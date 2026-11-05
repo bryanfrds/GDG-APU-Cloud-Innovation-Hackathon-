@@ -2,6 +2,11 @@
 // Run: kv run --env-file .env.local -- npm run viva:models
 import { GoogleGenAI } from "@google/genai";
 
+if (!process.env.GEMINI_API_KEY) {
+  console.error("GEMINI_API_KEY is not set. Run it with: kv run --env-file .env.local -- npm run viva:models");
+  process.exit(1);
+}
+
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const pager = await ai.models.list();
