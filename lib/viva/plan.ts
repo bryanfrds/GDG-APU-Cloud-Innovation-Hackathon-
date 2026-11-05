@@ -208,3 +208,15 @@ export const VIVA_TOOLS: Tool[] = [
     ],
   },
 ];
+
+/** True when two plans ask the same questions, compared field by field (key order doesn't matter). */
+export function samePlan(a: VivaPlan, b: VivaPlan): boolean {
+  return (
+    a.assignmentTitle === b.assignmentTitle &&
+    a.questions.length === b.questions.length &&
+    a.questions.every((q, i) => {
+      const other = b.questions[i];
+      return q.id === other.id && q.text === other.text && (q.focus ?? null) === (other.focus ?? null);
+    })
+  );
+}

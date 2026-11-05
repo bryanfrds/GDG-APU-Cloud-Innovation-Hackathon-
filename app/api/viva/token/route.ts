@@ -1,6 +1,5 @@
 // Hands the browser a short-lived, single-use pass for one viva.
 // The real GEMINI_API_KEY stays on the server.
-import { timingSafeEqual } from "node:crypto";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { SESSION_GRACE_MS, TOKEN_START_WINDOW_MS, VIVA_MODEL } from "@/lib/viva/config";
 import {
@@ -12,6 +11,8 @@ import {
   VIVA_TOOLS,
 } from "@/lib/viva/plan";
 import { createRateLimiter } from "@/lib/viva/rate-limit";
+import { clientAddress, passcodeOk, readJsonBody } from "@/lib/viva/request-guard";
+import { newVivaId, saveSession } from "@/lib/viva/store";
 
 export const dynamic = "force-dynamic";
 
@@ -23,36 +24,20 @@ const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 const MAX_BODY_BYTES = 16_000;
 
 export async function POST(req: Request) {
-  // On a public URL, set DEMO_PASSCODE so strangers can't run up the Gemini bill.
-  // Left unset (local dev), anyone who can reach the server can start a viva.
-  const passcode = process.env.DEMO_PASSCODE;
-  if (passcode && !sameText(req.headers.get("x-demo-code") ?? "", passcode)) {
-    return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
-  }
-
-  // Cloud Run adds the real caller address to the END of x-forwarded-for; anything
-  // before it was written by the caller and can be faked.
-  const ip = req.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || "local";
-  if (!limiter.allow(ip)) {
+  // Rate limit first, so wrong passcode guesses are limited too.
+  if (!limiter.allow(clientAddress(req))) {
     return Response.json({ error: "Too many vivas started. Wait a minute and try again." }, { status: 429 });
+  }
+  if (!passcodeOk(req)) {
+    return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
   }
 
   // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
   // TODO(Person 1): take a submission id instead and load its questions from Firestore,
   // so a student can't send their own questions.
-  const tooLarge = () => Response.json({ error: "The request is too large." }, { status: 413 });
-  // Refuse early when the size is declared, then check what actually arrived.
-  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return tooLarge();
-  const raw = await req.text();
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return tooLarge();
-  let body: { plan?: unknown; mode?: unknown } = {};
-  if (raw.trim()) {
-    try {
-      body = JSON.parse(raw) ?? {};
-    } catch {
-      return Response.json({ error: "The request body isn't valid JSON." }, { status: 400 });
-    }
-  }
+  const read = await readJsonBody(req, MAX_BODY_BYTES);
+  if ("error" in read) return Response.json({ error: read.error }, { status: read.status });
+  const body = read.body;
   const parsed = body.plan === undefined ? { plan: SAMPLE_PLAN } : parsePlan(body.plan);
   if ("error" in parsed) return Response.json({ error: parsed.error }, { status: 400 });
   const mode = parseMode(body.mode);
@@ -66,8 +51,9 @@ export async function POST(req: Request) {
   const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: "v1alpha" } });
   const now = Date.now();
 
+  let token;
   try {
-    const token = await ai.authTokens.create({
+    token = await ai.authTokens.create({
       config: {
         uses: 1,
         newSessionExpireTime: new Date(now + TOKEN_START_WINDOW_MS).toISOString(),
@@ -89,20 +75,24 @@ export async function POST(req: Request) {
         },
       },
     });
-
-    return Response.json(
-      { token: token.name, model: VIVA_MODEL, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
-      { headers: { "Cache-Control": "no-store" } },
-    );
   } catch (err) {
     console.error("Failed to create viva token", err);
     return Response.json({ error: "Could not start the viva. Try again." }, { status: 502 });
   }
-}
 
-/** Compares two strings without leaking how many characters matched. */
-function sameText(a: string, b: string) {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
+  // Remember what this viva was locked to, so the saved record can be checked against it.
+  // If that fails (say the disk isn't writable), still let the viva happen; it just can't be saved.
+  const vivaId = newVivaId();
+  let canSave = true;
+  try {
+    await saveSession({ vivaId, plan: parsed.plan, mode, issuedAt: new Date(now).toISOString() });
+  } catch (err) {
+    console.error("Failed to save viva session; this viva can't be saved", err);
+    canSave = false;
+  }
+
+  return Response.json(
+    { token: token.name, model: VIVA_MODEL, vivaId, canSave, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

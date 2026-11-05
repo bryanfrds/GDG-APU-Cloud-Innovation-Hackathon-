@@ -1,3 +1,6 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const create = vi.fn();
@@ -24,14 +27,47 @@ function request(headers: Record<string, string> = {}, body?: unknown) {
   });
 }
 
+let dataDir = "";
+
 describe("POST /api/viva/token", () => {
   beforeEach(() => {
     create.mockReset();
     create.mockResolvedValue({ name: "auth_tokens/abc123" });
     vi.stubEnv("GEMINI_API_KEY", FAKE_KEY);
     vi.stubEnv("DEMO_PASSCODE", "");
+    dataDir = mkdtempSync(path.join(tmpdir(), "viva-token-"));
+    vi.stubEnv("VIVA_DATA_DIR", dataDir);
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("gives each viva an id and remembers the plan and mode it was locked to", async () => {
+    const { POST } = await loadRoute();
+    const plan = { assignmentTitle: "Hash tables", questions: [{ id: "h1", text: "How do you handle collisions?" }] };
+    const body = await (await POST(request({}, { plan, mode: "demo" }))).json();
+    expect(body.vivaId).toMatch(/^viva_[0-9a-f]{24}$/);
+    const session = JSON.parse(readFileSync(path.join(dataDir, `${body.vivaId}.session.json`), "utf8"));
+    expect(session).toMatchObject({ vivaId: body.vivaId, plan, mode: "demo" });
+  });
+
+  it("still starts the viva when its session can't be saved, and says it can't be saved", async () => {
+    vi.stubEnv("VIVA_DATA_DIR", "/dev/null/cannot-write-here");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { POST } = await loadRoute();
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ token: "auth_tokens/abc123", canSave: false });
+  });
+
+  it("doesn't remember a viva when Gemini refuses the pass", async () => {
+    create.mockRejectedValue(new Error("nope"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { POST } = await loadRoute();
+    expect((await POST(request())).status).toBe(502);
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
 
   it("returns a one-time pass and never the real key", async () => {
     const { POST } = await loadRoute();
