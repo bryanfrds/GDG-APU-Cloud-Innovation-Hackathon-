@@ -65,7 +65,7 @@ describe("POST /api/viva/token", () => {
     expect(await res.json()).toMatchObject({ mode: "demo", seconds: 30, plan });
     const { config } = create.mock.calls[0][0];
     const instructions = config.liveConnectConstraints.config.systemInstruction;
-    expect(instructions).toContain("[h1] How do you handle collisions?");
+    expect(instructions).toContain('<question id="h1">How do you handle collisions?</question>');
     expect(instructions).toMatch(/30-second demo/);
   });
 
@@ -74,11 +74,30 @@ describe("POST /api/viva/token", () => {
     try {
       const { POST } = await loadRoute();
       await POST(request({}, { mode: "demo" }));
-      const { config } = create.mock.calls[0][0];
-      expect(config.expireTime).toBe("2026-11-05T10:02:30.000Z"); // 30 s viva + 2 min grace
+      await POST(request({}, { mode: "full" }));
+      const [demo, full] = create.mock.calls.map((c) => c[0].config);
+      // 1 min to connect + the viva + 2 min grace
+      expect(demo.expireTime).toBe("2026-11-05T10:03:30.000Z");
+      expect(full.expireTime).toBe("2026-11-05T10:08:00.000Z");
+      expect(demo.newSessionExpireTime).toBe("2026-11-05T10:01:00.000Z");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rejects a body that isn't valid JSON", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(
+      new Request("http://localhost/api/viva/token", { method: "POST", body: "{not json", headers: { "content-type": "application/json" } }),
+    );
+    expect(res.status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("uses the sample plan when the body is empty", async () => {
+    const { POST } = await loadRoute();
+    const res = await POST(request());
+    expect((await res.json()).plan.questions[0].id).toBe("q1");
   });
 
   it("rejects a bad plan without asking Gemini", async () => {

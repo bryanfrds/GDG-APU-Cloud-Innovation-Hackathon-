@@ -16,7 +16,7 @@ import { createRateLimiter } from "@/lib/viva/rate-limit";
 export const dynamic = "force-dynamic";
 
 // At most 10 passes per minute from one address: plenty for a demo, and it
-// stops a script from minting hundreds of 10-minute sessions on our bill.
+// stops a script from minting hundreds of viva sessions on our bill.
 const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
 export async function POST(req: Request) {
@@ -37,10 +37,18 @@ export async function POST(req: Request) {
   // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
   // TODO(Person 1): take a submission id instead and load its questions from Firestore,
   // so a student can't send their own questions.
-  const body = await req.json().catch(() => ({}));
-  const parsed = body?.plan === undefined ? { plan: SAMPLE_PLAN } : parsePlan(body.plan);
+  const raw = await req.text();
+  let body: { plan?: unknown; mode?: unknown } = {};
+  if (raw.trim()) {
+    try {
+      body = JSON.parse(raw) ?? {};
+    } catch {
+      return Response.json({ error: "The request body isn't valid JSON." }, { status: 400 });
+    }
+  }
+  const parsed = body.plan === undefined ? { plan: SAMPLE_PLAN } : parsePlan(body.plan);
   if ("error" in parsed) return Response.json({ error: parsed.error }, { status: 400 });
-  const mode = parseMode(body?.mode);
+  const mode = parseMode(body.mode);
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -56,7 +64,10 @@ export async function POST(req: Request) {
       config: {
         uses: 1,
         newSessionExpireTime: new Date(now + TOKEN_START_WINDOW_MS).toISOString(),
-        expireTime: new Date(now + MODE_SECONDS[mode] * 1000 + SESSION_GRACE_MS).toISOString(),
+        // Room to connect, then the viva's time limit, then a little grace to finish the last sentence.
+        expireTime: new Date(
+          now + TOKEN_START_WINDOW_MS + MODE_SECONDS[mode] * 1000 + SESSION_GRACE_MS,
+        ).toISOString(),
         // Setting the constraints without lockAdditionalFields locks every Live
         // setting, so a pass can't be reused with other tools or settings.
         liveConnectConstraints: {
