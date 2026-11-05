@@ -1,8 +1,9 @@
 "use client";
 
 // Viva test page: a spoken viva with the AI examiner, with question progress,
-// a countdown and a graceful ending. Plain on purpose; the real screens get
-// designed separately and reuse lib/viva.
+// a countdown and a graceful ending. When it ends, the viva is saved to the server
+// and can be downloaded. Plain on purpose; the real screens get designed
+// separately and reuse lib/viva.
 import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
@@ -10,8 +11,13 @@ import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/
 import { MODE_SECONDS, SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
 import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
+import { buildRecord, type EndReason, type VivaRecord } from "@/lib/viva/record";
+import { recordFileName, sendRecord } from "@/lib/viva/save";
 
 type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
+type SaveState = "idle" | "saving" | "saved" | "failed" | "off";
+/** What the server told us about this viva when it issued the pass. */
+type LiveViva = { vivaId: string; canSave: boolean; mode: VivaMode; plan: VivaPlan; startedAt: number };
 
 const STEP_TIMEOUT_MS = 15000;
 const KICKOFF = "The student is ready. Begin the viva.";
@@ -28,6 +34,9 @@ export default function VivaTestPage() {
   const [plan, setPlan] = useState<VivaPlan | null>(null);
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const [record, setRecord] = useState<VivaRecord | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveError, setSaveError] = useState<{ message: string; canRetry: boolean } | null>(null);
 
   const sessionRef = useRef<Session | null>(null);
   const planRef = useRef<VivaPlan | null>(null);
@@ -40,6 +49,12 @@ export default function VivaTestPage() {
   // While it's closing, the connection dropping is expected, not an error.
   const endingRef = useRef<Ending | null>(null);
   const stopCountdownRef = useRef<(() => void) | null>(null);
+  // Refs, not state, so tags and the saved record are current inside event handlers.
+  const vivaRef = useRef<LiveViva | null>(null);
+  const questionIdRef = useRef<string | null>(null);
+  const transcriptRef = useRef<Transcript>(EMPTY_TRANSCRIPT);
+  const endReasonRef = useRef<EndReason>("completed");
+  const saveAttemptRef = useRef(0);
 
   // Clean up the mic and connection if the page is closed mid-viva.
   useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -47,14 +62,17 @@ export default function VivaTestPage() {
   function handleMessage(msg: LiveServerMessage) {
     if (msg.goAway) {
       // Gemini warns that it will close the connection soon.
-      wrapUp("The session is ending, so the viva has stopped here.");
+      wrapUp("The session is ending, so the viva has stopped here.", "session_ended");
       return;
     }
     if (msg.toolCall) {
       // The examiner reports progress and waits for a reply before it carries on.
       const functionResponses = answerToolCalls(msg.toolCall.functionCalls, {
-        onStartQuestion: setQuestionId,
-        onEndViva: () => wrapUp("Viva complete. Thank you!"),
+        onStartQuestion: (id) => {
+          questionIdRef.current = id;
+          setQuestionId(id);
+        },
+        onEndViva: () => wrapUp("Viva complete. Thank you!", "completed"),
         knownQuestionIds: planRef.current?.questions.map((q) => q.id),
       });
       sessionRef.current?.sendToolResponse({ functionResponses });
@@ -80,14 +98,16 @@ export default function VivaTestPage() {
     const heard = content.inputTranscription?.text;
     const said = content.outputTranscription?.text;
     if (heard || said || content.turnComplete || content.interrupted) {
-      setTranscript((t) => {
-        let next = t;
-        if (heard) next = appendText(next, "student", heard);
-        if (said) next = appendText(next, "ai", said);
-        if (content.interrupted) next = closeTurn(next, "interrupted");
-        else if (content.turnComplete) next = closeTurn(next, "complete");
-        return next;
-      });
+      // Tag new lines with the question being asked now and the time since the viva began.
+      const startedAt = vivaRef.current?.startedAt ?? Date.now();
+      const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAt };
+      let next = transcriptRef.current;
+      if (heard) next = appendText(next, "student", heard, meta);
+      if (said) next = appendText(next, "ai", said, meta);
+      if (content.interrupted) next = closeTurn(next, "interrupted");
+      else if (content.turnComplete) next = closeTurn(next, "complete");
+      transcriptRef.current = next;
+      setTranscript(next);
     }
   }
 
@@ -97,7 +117,11 @@ export default function VivaTestPage() {
     const current = () => attemptRef.current === attempt;
 
     setError("");
+    transcriptRef.current = EMPTY_TRANSCRIPT;
     setTranscript(EMPTY_TRANSCRIPT);
+    setRecord(null);
+    setSaveState("idle");
+    setSaveError(null);
     setAiSpeaking(false);
     setPlan(null);
     setQuestionId(null);
@@ -113,7 +137,7 @@ export default function VivaTestPage() {
     endingRef.current = createEnding({
       isPlaying: () => player.isPlaying(),
       onFinish: (notice) => {
-        if (current()) endWithNotice(notice);
+        if (current()) endWithNotice(notice, endReasonRef.current);
       },
     });
 
@@ -166,6 +190,13 @@ export default function VivaTestPage() {
       sessionRef.current = session;
 
       planRef.current = body.plan;
+      vivaRef.current = {
+        vivaId: body.vivaId,
+        canSave: body.canSave !== false && typeof body.vivaId === "string",
+        mode: body.mode === "demo" ? "demo" : "full",
+        plan: body.plan,
+        startedAt: Date.now(),
+      };
       setPlan(body.plan);
       setStatus("live");
       stopCountdownRef.current = startCountdown(Number(body.seconds) || MODE_SECONDS[mode], setSecondsLeft, timeUp);
@@ -182,12 +213,13 @@ export default function VivaTestPage() {
     sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
     sessionRef.current?.sendClientContent({ turns: TIME_UP, turnComplete: true });
     // Wait for the examiner to start its thank-you, then for it to finish.
-    wrapUp("Time's up. The viva has ended.", { waitForSpeech: true });
+    wrapUp("Time's up. The viva has ended.", "time_up", { waitForSpeech: true });
   }
 
   /** Ends the viva gracefully: stop listening, then let the examiner finish speaking. */
-  function wrapUp(notice: string, opts?: { waitForSpeech?: boolean }) {
+  function wrapUp(notice: string, reason: EndReason, opts?: { waitForSpeech?: boolean }) {
     if (!endingRef.current?.wrapUp(notice, opts)) return; // already ending
+    endReasonRef.current = reason;
     stopListening();
     setStatus("closing");
   }
@@ -200,13 +232,15 @@ export default function VivaTestPage() {
   }
 
   function fail(message: string) {
+    finishViva("error");
     teardown();
     setError(message);
     setStatus("error");
     setAiSpeaking(false);
   }
 
-  function endWithNotice(message: string) {
+  function endWithNotice(message: string, reason: EndReason) {
+    finishViva(reason);
     teardown();
     setError(message);
     setStatus("ended");
@@ -215,9 +249,52 @@ export default function VivaTestPage() {
 
   function stop() {
     const wasStarting = status === "starting";
+    finishViva("stopped");
     teardown();
     setStatus(wasStarting ? "cancelled" : "ended");
     setAiSpeaking(false);
+  }
+
+  /** If a viva was under way, turn its transcript into a record and save it. */
+  function finishViva(reason: EndReason) {
+    const viva = vivaRef.current;
+    vivaRef.current = null; // only once per viva
+    if (!viva) return;
+    const built = buildRecord({
+      vivaId: viva.vivaId,
+      mode: viva.mode,
+      plan: viva.plan,
+      startedAt: viva.startedAt,
+      endedAt: Date.now(),
+      endReason: reason,
+      transcript: transcriptRef.current,
+    });
+    setRecord(built);
+    if (viva.canSave) void save(built);
+    else setSaveState("off");
+  }
+
+  async function save(toSave: VivaRecord) {
+    const attempt = ++saveAttemptRef.current;
+    setSaveState("saving");
+    setSaveError(null);
+    const result = await sendRecord(toSave, passcode);
+    if (attempt !== saveAttemptRef.current) return; // a newer save or viva took over
+    if (result.ok) {
+      setSaveState("saved");
+    } else {
+      setSaveState("failed");
+      setSaveError({ message: result.error, canRetry: result.canRetry });
+    }
+  }
+
+  function download(toSave: VivaRecord) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(toSave, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = recordFileName(toSave);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   /** Stops everything from the current attempt and marks it as finished. */
@@ -226,6 +303,9 @@ export default function VivaTestPage() {
     endingRef.current?.cancel();
     endingRef.current = null;
     planRef.current = null;
+    vivaRef.current = null;
+    questionIdRef.current = null;
+    endReasonRef.current = "completed";
     stopListening();
     const session = sessionRef.current;
     sessionRef.current = null;
@@ -308,6 +388,21 @@ export default function VivaTestPage() {
         </p>
       )}
 
+      {record && !running && (
+        <div data-testid="save" style={styles.save}>
+          <span>
+            {saveLabel(saveState, record)}
+            {saveError && ` ${saveError.message}`}
+          </span>
+          <span style={{ display: "flex", gap: 8 }}>
+            {saveState === "failed" && saveError?.canRetry && (
+              <button onClick={() => save(record)}>Try saving again</button>
+            )}
+            <button onClick={() => download(record)}>Download transcript</button>
+          </span>
+        </div>
+      )}
+
       <section aria-label="Conversation" data-testid="transcript">
         {lines.map((line, i) =>
           // A line can be empty while Gemini's first chunk was only leaked tags.
@@ -338,6 +433,22 @@ function statusLabel(status: Status, aiSpeaking: boolean) {
       return "Cancelled";
     case "error":
       return "Something went wrong";
+  }
+}
+
+function saveLabel(state: SaveState, record: VivaRecord) {
+  const turns = `${record.turns.length} line${record.turns.length === 1 ? "" : "s"}`;
+  switch (state) {
+    case "saving":
+      return `Saving the viva (${turns})…`;
+    case "saved":
+      return `Saved (${turns}).`;
+    case "failed":
+      return "Couldn't save the viva.";
+    case "off":
+      return `This viva can't be saved on this server (${turns}); download it instead.`;
+    default:
+      return "";
   }
 }
 
@@ -381,6 +492,17 @@ const styles = {
   button: { fontSize: 16, padding: "10px 18px", cursor: "pointer" },
   ai: { background: "#f2f2f2", padding: "8px 12px", borderRadius: 8 },
   student: { padding: "8px 12px" },
+  save: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+    alignItems: "center",
+    border: "1px solid #e5e5e5",
+    borderRadius: 8,
+    padding: "8px 12px",
+    margin: "0 0 12px",
+  },
   fieldset: { border: "1px solid #ddd", borderRadius: 8, margin: "0 0 12px", padding: "8px 12px" },
   progress: {
     display: "flex",
