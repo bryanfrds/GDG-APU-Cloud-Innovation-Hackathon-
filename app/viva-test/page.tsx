@@ -7,7 +7,8 @@
 import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
-import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
+import { addTypedLine, appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
+import { createTypingMode, type TypingMode } from "@/lib/viva/typing";
 import { MODE_SECONDS, SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
 import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
@@ -40,7 +41,10 @@ export default function VivaTestPage() {
   // While typing, the mic is paused: mixing a silent audio stream with typed answers
   // makes Gemini think the student said nothing, and it moves on or answers itself.
   const [typingMode, setTypingMode] = useState(false);
-  const typingRef = useRef(false);
+  const typingRef = useRef<TypingMode | null>(null);
+  typingRef.current ??= createTypingMode(() => sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }));
+  const typing = typingRef.current;
+  const typedInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const sessionRef = useRef<Session | null>(null);
   const planRef = useRef<VivaPlan | null>(null);
@@ -163,7 +167,7 @@ export default function VivaTestPage() {
       // Ask for the mic first, so the permission prompt doesn't eat into the
       // token's short start window. Audio before the session opens is dropped.
       const mic = await startMic((data) => {
-        if (!typingRef.current) sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
+        if (!typing.active) sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
       });
       if (!current()) return mic.stop();
       micRef.current = mic;
@@ -293,7 +297,8 @@ export default function VivaTestPage() {
   function sendTyped(e: React.FormEvent) {
     e.preventDefault();
     const session = sessionRef.current;
-    if (!session || status !== "live") return;
+    // Not while wrapping up: the examiner is saying goodbye and the mic is off.
+    if (!session || status !== "live" || endingRef.current?.closing) return;
     const prepared = prepareTypedAnswer(typed);
     if ("error" in prepared) {
       setTypedError(prepared.error);
@@ -301,12 +306,11 @@ export default function VivaTestPage() {
     }
     // If the examiner is mid-sentence, the student is answering over it: stop its voice.
     playerRef.current?.interrupt();
-    useTyping(true);
+    switchTyping(true);
     session.sendClientContent(typedAnswerMessage(prepared.text));
-    // Typed answers don't come back as speech transcription, so add them to the transcript here.
+    // Typed answers don't come back as speech transcription, so add them to the transcript here, marked as typed.
     const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAtRef.current };
-    let next = closeTurn(transcriptRef.current, "complete");
-    next = closeTurn(appendText(next, "student", prepared.text, meta), "complete");
+    const next = addTypedLine(transcriptRef.current, prepared.text, meta);
     transcriptRef.current = next;
     setTranscript(next);
     setTyped("");
@@ -314,12 +318,8 @@ export default function VivaTestPage() {
   }
 
   /** Switches between answering by typing (mic paused) and by speaking. */
-  function useTyping(on: boolean) {
-    if (typingRef.current === on) return;
-    typingRef.current = on;
-    setTypingMode(on);
-    // Tell Gemini the audio has stopped, so it doesn't wait for, or imagine, a spoken answer.
-    if (on) sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
+  function switchTyping(on: boolean) {
+    if (typing.set(on)) setTypingMode(on);
   }
 
   function toggleMute(next: boolean) {
@@ -330,7 +330,7 @@ export default function VivaTestPage() {
   /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
     attemptRef.current++;
-    typingRef.current = false;
+    typing.reset();
     setTypingMode(false);
     endingRef.current?.cancel();
     endingRef.current = null;
@@ -395,7 +395,7 @@ export default function VivaTestPage() {
       </label>
 
       <p data-testid="status" aria-live="polite" style={{ margin: "12px 0" }}>
-        <strong>{statusLabel(status, aiSpeaking)}</strong>
+        <strong>{statusLabel(status, aiSpeaking, typingMode)}</strong>
       </p>
       {plan && (status === "live" || status === "closing") && (
         <div data-testid="progress" style={styles.progress}>
@@ -429,31 +429,50 @@ export default function VivaTestPage() {
           <label htmlFor="typed-answer" style={{ display: "block", marginBottom: 4 }}>
             Prefer typing, or is the audio struggling? Type your answer:
           </label>
-          <span style={{ display: "flex", gap: 8 }}>
-            <input
-              id="typed-answer"
-              value={typed}
-              onChange={(e) => {
-                setTyped(e.target.value);
-                if (typedError) setTypedError("");
-              }}
-              maxLength={MAX_TYPED_CHARS * 2}
-              autoComplete="off"
-              style={{ flex: 1, fontSize: 16, minWidth: 0 }}
-            />
+          <textarea
+            id="typed-answer"
+            ref={typedInputRef}
+            value={typed}
+            onChange={(e) => {
+              setTyped(e.target.value);
+              if (typedError) setTypedError("");
+            }}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter adds a new line.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            rows={2}
+            maxLength={MAX_TYPED_CHARS * 2}
+            aria-invalid={typedError ? true : undefined}
+            aria-describedby={`typed-count${typedError ? " typed-error" : ""}`}
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 16, fontFamily: "inherit" }}
+          />
+          <span style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+            <span id="typed-count" style={{ color: typed.length > MAX_TYPED_CHARS ? "#b00020" : "#555", fontSize: 14 }}>
+              {typed.length}/{MAX_TYPED_CHARS}
+            </span>
             <button type="submit">Send</button>
           </span>
-          {typingMode ? (
+          {typedError && (
+            <span id="typed-error" role="alert" style={{ color: "#b00020", display: "block", marginTop: 4 }}>
+              {typedError}
+            </span>
+          )}
+          {typingMode && (
             <span style={{ display: "block", marginTop: 6, color: "#555" }}>
-              Mic paused while you type.{" "}
-              <button type="button" onClick={() => useTyping(false)}>
+              Mic paused while you type; anything you say isn't heard.{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  switchTyping(false);
+                  typedInputRef.current?.focus(); // keep focus in the form, not lost on the page
+                }}
+              >
                 Speak instead
               </button>
-            </span>
-          ) : null}
-          {typedError && (
-            <span role="alert" style={{ color: "#b00020", display: "block", marginTop: 4 }}>
-              {typedError}
             </span>
           )}
         </form>
@@ -488,14 +507,15 @@ export default function VivaTestPage() {
   );
 }
 
-function statusLabel(status: Status, aiSpeaking: boolean) {
+function statusLabel(status: Status, aiSpeaking: boolean, typingMode: boolean) {
   switch (status) {
     case "idle":
       return "Not started";
     case "starting":
       return "Starting: allow the microphone if your browser asks…";
     case "live":
-      return aiSpeaking ? "Examiner is speaking…" : "Listening…";
+      if (aiSpeaking) return "Examiner is speaking…";
+      return typingMode ? "Mic paused: type your answer below." : "Listening…";
     case "closing":
       return "Wrapping up…";
     case "ended":
