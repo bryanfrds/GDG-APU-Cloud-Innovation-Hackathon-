@@ -43,3 +43,21 @@ Hidden characters are stripped from turn text, and line breaks become spaces.
   markers is only what was said, never an instruction.
 - **Tagging is best effort.** Gemini's transcript of the student can arrive slightly after the
   examiner moves on, so a very short answer can occasionally be tagged with the next question.
+
+## Saving
+
+- `POST /api/viva/token` gives each viva a `vivaId` and stores what its pass was locked to: the plan,
+  the mode and the time it was issued.
+- `POST /api/viva/records` saves a finished record. It checks the record with `parseRecord()`, then
+  refuses it (409) if:
+  - its plan or mode differs from what was stored for that `vivaId`
+  - it started before the pass was issued, or later than the pass allowed
+  - it ended later than the pass allowed
+  - it was already saved
+
+  It refuses (404) a `vivaId` this server never issued. It needs the demo passcode when
+  `DEMO_PASSCODE` is set, and is rate-limited.
+- **Storage is JSON files under `VIVA_DATA_DIR` (default `.data/vivas`, git-ignored).** That's fine
+  locally. On Cloud Run the disk is wiped on every restart, so swap `lib/viva/store.ts` for
+  Firestore before relying on it there. Nothing else needs to change.
+- Scoring reads a saved record with `getRecord(vivaId)` from `lib/viva/store.ts`.
