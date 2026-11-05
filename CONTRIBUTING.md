@@ -42,13 +42,13 @@ Names go next to each person below once we've agreed who takes what.
 - **Person 1 (name TBC): submissions and questions.** The upload API, private file storage
   (Cloud Storage), reading code and reports, Gemini writing questions about the student's own work, and saving
   submissions and questions (Firestore).
-- **Person 2 (name TBC): the voice viva.** The real-time spoken conversation (Gemini Live API),
+- **Person 2 (Bryan): the voice viva.** The real-time spoken conversation (Gemini Live API),
   follow-up questions when an answer is vague, the transcript, time limits (including a
   ~30-second demo mode), and the text-chat fallback. This is the riskiest part, so prove it works early.
 - **Person 3 (name TBC): scoring and insights.** Scoring each answer against the submission,
   the "answers don't match the code" flag, the per-student report data, class-wide stats, and the 40 synthetic
   demo students.
-- **Person 4 (Bryan): the app, deployment and submission.** Every screen (student submit and viva
+- **Person 4 (name TBC): the app, deployment and submission.** Every screen (student submit and viva
   pages, lecturer report and class view), the recording-consent step, sign-in, phone layout,
   deploying to Cloud Run, the resettable demo data, the README, and the pitch deck and backup video.
 
