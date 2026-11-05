@@ -24,7 +24,9 @@ export async function POST(req: Request) {
     return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
   }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "local";
+  // Cloud Run adds the real caller address to the END of x-forwarded-for; anything
+  // before it was written by the caller and can be faked.
+  const ip = req.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || "local";
   if (!limiter.allow(ip)) {
     return Response.json({ error: "Too many vivas started. Wait a minute and try again." }, { status: 429 });
   }
