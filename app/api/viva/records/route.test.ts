@@ -61,13 +61,16 @@ describe("POST /api/viva/records", () => {
     expect(await getRecord(record.vivaId)).toMatchObject({ ...record, receivedAt: expect.any(String) });
   });
 
-  it("saves each viva only once", async () => {
+  it("treats an identical retry as success, but refuses a different record for the same viva", async () => {
     const { POST } = await loadRoute();
     const record = await startedViva();
     expect((await POST(post(record))).status).toBe(201);
-    const again = await POST(post(record));
-    expect(again.status).toBe(409);
-    expect((await again.json()).error).toMatch(/already been saved/);
+    const retry = await POST(post(record));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ok: true, vivaId: record.vivaId, alreadySaved: true });
+    const changed = await POST(post({ ...record, endReason: "stopped" }));
+    expect(changed.status).toBe(409);
+    expect((await changed.json()).error).toMatch(/already been saved/);
   });
 
   it("refuses a viva this server never started", async () => {
@@ -92,19 +95,61 @@ describe("POST /api/viva/records", () => {
     expect((await POST(post({ ...record, mode: "full" }))).status).toBe(409);
   });
 
+  // The pass for a demo viva: issued at ISSUED, must connect within 1 min, runs 30 s,
+  // then 2 min grace. Each limit allows CLOCK_SLACK_MS (10 min) for the browser's clock.
+  const MIN = 60_000;
+  const SLACK = 10 * MIN;
+  const LATEST_START = 1 * MIN + SLACK;
+  const LATEST_END = 1 * MIN + 30_000 + 2 * MIN + SLACK;
+
+  it("accepts a start just inside the clock slack before the pass was issued", async () => {
+    const { POST } = await loadRoute();
+    const record = await startedViva({ startedAt: ISSUED - SLACK + 1000, endedAt: ISSUED - SLACK + 21_000 });
+    expect((await POST(post(record))).status).toBe(201);
+  });
+
   it("refuses a viva that started before its pass was issued", async () => {
     const { POST } = await loadRoute();
-    const record = await startedViva({ startedAt: ISSUED - 10 * 60_000, endedAt: ISSUED - 9 * 60_000 });
+    const record = await startedViva({ startedAt: ISSUED - SLACK - 1000, endedAt: ISSUED - SLACK + 19_000 });
     const res = await POST(post(record));
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/start time/);
   });
 
-  it("refuses a viva that started long after its pass expired", async () => {
+  it("accepts a start just before the latest allowed start", async () => {
+    vi.setSystemTime(ISSUED + LATEST_START + MIN);
     const { POST } = await loadRoute();
-    vi.setSystemTime(ISSUED + 20 * 60_000);
-    const record = await startedViva({ startedAt: ISSUED + 15 * 60_000, endedAt: ISSUED + 15 * 60_000 + 20_000 });
-    expect((await POST(post(record))).status).toBe(409);
+    const record = await startedViva({ startedAt: ISSUED + LATEST_START - 1000, endedAt: ISSUED + LATEST_START });
+    expect((await POST(post(record))).status).toBe(201);
+  });
+
+  it("refuses a viva that started after its pass's connect window (start check alone)", async () => {
+    vi.setSystemTime(ISSUED + LATEST_START + MIN);
+    const { POST } = await loadRoute();
+    // Ends well before the latest allowed end, so only the start check can refuse it.
+    const record = await startedViva({ startedAt: ISSUED + LATEST_START + 1000, endedAt: ISSUED + LATEST_START + 2000 });
+    expect(Date.parse(record.endedAt)).toBeLessThan(ISSUED + LATEST_END);
+    const res = await POST(post(record));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/start time/);
+  });
+
+  it("accepts an end just before the latest allowed end", async () => {
+    vi.setSystemTime(ISSUED + LATEST_END + MIN);
+    const { POST } = await loadRoute();
+    const record = await startedViva({ startedAt: ISSUED + LATEST_START - 1000, endedAt: ISSUED + LATEST_END - 1000 });
+    expect((await POST(post(record))).status).toBe(201);
+  });
+
+  it("refuses a viva that ended later than its pass allowed (end check alone)", async () => {
+    vi.setSystemTime(ISSUED + LATEST_END + MIN);
+    const { POST } = await loadRoute();
+    // Starts inside the window, so only the end check can refuse it.
+    const record = await startedViva({ startedAt: ISSUED + LATEST_START - 1000, endedAt: ISSUED + LATEST_END + 1000 });
+    expect(Date.parse(record.endedAt)).toBe(ISSUED + LATEST_END + 1000); // not capped by buildRecord
+    const res = await POST(post(record));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/ended later/);
   });
 
   it("rejects a record that fails the format checks", async () => {
@@ -132,6 +177,14 @@ describe("POST /api/viva/records", () => {
     const record = await startedViva();
     expect((await POST(post(record))).status).toBe(401);
     expect((await POST(post(record, { "x-demo-code": "letmein" }))).status).toBe(201);
+  });
+
+  it("limits wrong passcode guesses too", async () => {
+    vi.stubEnv("DEMO_PASSCODE", "letmein");
+    const { POST } = await loadRoute();
+    const from = { "x-forwarded-for": "9.9.9.9", "x-demo-code": "guess" };
+    for (let i = 0; i < 20; i++) expect((await POST(post({}, from))).status).toBe(401);
+    expect((await POST(post({}, from))).status).toBe(429);
   });
 
   it("limits one address to 20 saves a minute", async () => {
