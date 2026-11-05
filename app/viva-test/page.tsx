@@ -309,11 +309,14 @@ export default function VivaTestPage() {
       )}
 
       <section aria-label="Conversation" data-testid="transcript">
-        {lines.map((line, i) => (
-          <p key={i} style={line.who === "ai" ? styles.ai : styles.student}>
-            <strong>{line.who === "ai" ? "Examiner" : "You"}:</strong> {line.text}
-          </p>
-        ))}
+        {lines.map((line, i) =>
+          // A line can be empty while Gemini's first chunk was only leaked tags.
+          line.text.trim() ? (
+            <p key={i} style={line.who === "ai" ? styles.ai : styles.student}>
+              <strong>{line.who === "ai" ? "Examiner" : "You"}:</strong> {line.text}
+            </p>
+          ) : null,
+        )}
       </section>
     </main>
   );
