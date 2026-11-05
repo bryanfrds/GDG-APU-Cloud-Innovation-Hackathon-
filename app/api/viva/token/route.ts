@@ -10,7 +10,14 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(req: Request) {
+  // On a public URL, set DEMO_PASSCODE so strangers can't run up the Gemini bill.
+  // Left unset (local dev), anyone who can reach the server can start a viva.
+  const passcode = process.env.DEMO_PASSCODE;
+  if (passcode && req.headers.get("x-demo-code") !== passcode) {
+    return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "Server is missing GEMINI_API_KEY" }, { status: 500 });

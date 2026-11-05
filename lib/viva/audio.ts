@@ -13,23 +13,29 @@ export async function startMic(onChunk: (base64: string) => void): Promise<MicCa
   const ctx = new AudioContext();
   try {
     await ctx.audioWorklet.addModule("/viva-mic-worklet.js");
+    await ctx.resume(); // Safari can leave it paused when created after an await
     const source = ctx.createMediaStreamSource(stream);
     const worklet = new AudioWorkletNode(ctx, "viva-mic");
+    // Route to the speakers through a muted gain: some Safari versions only
+    // process nodes that are connected to the output.
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
     worklet.port.onmessage = (e: MessageEvent<ArrayBuffer>) => onChunk(toBase64(e.data));
-    source.connect(worklet);
+    source.connect(worklet).connect(mute).connect(ctx.destination);
 
     return {
       stop: () => {
         worklet.port.onmessage = null;
         source.disconnect();
         worklet.disconnect();
+        mute.disconnect();
         stream.getTracks().forEach((t) => t.stop());
-        void ctx.close();
+        void ctx.close().catch(() => {});
       },
     };
   } catch (err) {
     stream.getTracks().forEach((t) => t.stop());
-    void ctx.close();
+    void ctx.close().catch(() => {});
     throw err;
   }
 }
@@ -39,6 +45,9 @@ export class VoicePlayer {
   private ctx = new AudioContext({ sampleRate: OUTPUT_RATE });
   private nextStart = 0;
   private playing = new Set<AudioBufferSourceNode>();
+
+  /** onIdle fires when the last queued audio finishes playing (not when Gemini finishes sending). */
+  constructor(private onIdle?: () => void) {}
 
   play(base64: string) {
     const pcm = new Int16Array(fromBase64(base64));
@@ -54,12 +63,16 @@ export class VoicePlayer {
     node.start(startAt);
     this.nextStart = startAt + buffer.duration;
     this.playing.add(node);
-    node.onended = () => this.playing.delete(node);
+    node.onended = () => {
+      this.playing.delete(node);
+      if (this.playing.size === 0) this.onIdle?.();
+    };
   }
 
   /** Stops whatever the AI is saying right now (used when the student talks over it). */
   interrupt() {
     for (const node of this.playing) {
+      node.onended = null;
       try {
         node.stop();
       } catch {
@@ -68,16 +81,18 @@ export class VoicePlayer {
     }
     this.playing.clear();
     this.nextStart = 0;
+    this.onIdle?.();
   }
 
   /** Browsers start audio paused until the user clicks; call this from the click. */
   resume() {
-    return this.ctx.resume();
+    return this.ctx.resume().catch(() => {});
   }
 
   close() {
+    this.onIdle = undefined;
     this.interrupt();
-    void this.ctx.close();
+    void this.ctx.close().catch(() => {});
   }
 }
 

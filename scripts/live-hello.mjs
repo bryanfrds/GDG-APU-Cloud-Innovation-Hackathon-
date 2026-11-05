@@ -33,9 +33,8 @@ const done = new Promise((resolve, reject) => {
           if (content?.turnComplete) resolve();
         },
         onerror: (e) => reject(e.error ?? e),
-        onclose: (e) => {
-          if (!audioChunks.length) reject(new Error(`Closed before any reply: ${e.reason || e.code}`));
-        },
+        // Rejecting after resolve() does nothing, so this only fires on an early close.
+        onclose: (e) => reject(new Error(`Connection closed before the reply finished: ${e.reason || e.code}`)),
       },
     })
     .then((session) => {
@@ -43,7 +42,7 @@ const done = new Promise((resolve, reject) => {
         turns: "Introduce yourself in one sentence, then ask me my first viva question about a sorting assignment.",
         turnComplete: true,
       });
-      done.finally(() => session.close());
+      done.finally(() => session.close()).catch(() => {});
     })
     .catch(reject);
 });

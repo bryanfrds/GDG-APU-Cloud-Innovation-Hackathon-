@@ -6,10 +6,11 @@
 import { useEffect, useRef, useState } from "react";
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
+import { appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
 
 type Status = "idle" | "starting" | "live" | "ended" | "error";
-type Line = { who: "ai" | "student"; text: string };
 
+const STEP_TIMEOUT_MS = 15000;
 const KICKOFF =
   "The student is ready. Greet them in one sentence, then ask your first question " +
   "about their sorting algorithms assignment.";
@@ -17,88 +18,117 @@ const KICKOFF =
 export default function VivaTestPage() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
-  const [lines, setLines] = useState<Line[]>([]);
+  const [transcript, setTranscript] = useState<Transcript>(EMPTY_TRANSCRIPT);
   const [aiSpeaking, setAiSpeaking] = useState(false);
+  const [passcode, setPasscode] = useState("");
 
   const sessionRef = useRef<Session | null>(null);
   const micRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<VoicePlayer | null>(null);
-  const endedByUser = useRef(false);
+  // Each Start gets a new number. Anything from an older attempt (a late close
+  // event, a slow mic prompt) sees it's no longer current and cleans up quietly.
+  const attemptRef = useRef(0);
 
   // Clean up the mic and connection if the page is closed mid-viva.
-  useEffect(() => () => teardown(), []);
-
-  function addText(who: Line["who"], text: string) {
-    if (!text) return;
-    setLines((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.who === who) {
-        return [...prev.slice(0, -1), { who, text: last.text + text }];
-      }
-      return [...prev, { who, text: text.trimStart() }];
-    });
-  }
+  useEffect(() => () => teardown(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleMessage(msg: LiveServerMessage) {
+    if (msg.goAway) {
+      // Gemini is about to end the connection (it caps session length).
+      endWithNotice("Time's up: the viva session reached its length limit.");
+      return;
+    }
     const content = msg.serverContent;
     if (!content) return;
 
     if (content.interrupted) {
-      // The student started talking over the AI: stop its voice straight away.
+      // The student started talking over the AI: stop its voice straight away
+      // and drop any audio that came with this message.
       playerRef.current?.interrupt();
-      setAiSpeaking(false);
-    }
-    for (const part of content.modelTurn?.parts ?? []) {
-      if (part.inlineData?.data) {
-        playerRef.current?.play(part.inlineData.data);
-        setAiSpeaking(true);
+    } else {
+      for (const part of content.modelTurn?.parts ?? []) {
+        if (part.inlineData?.data) {
+          playerRef.current?.play(part.inlineData.data);
+          setAiSpeaking(true);
+        }
       }
     }
-    if (content.inputTranscription?.text) addText("student", content.inputTranscription.text);
-    if (content.outputTranscription?.text) addText("ai", content.outputTranscription.text);
-    if (content.turnComplete) setAiSpeaking(false);
+
+    const heard = content.inputTranscription?.text;
+    const said = content.outputTranscription?.text;
+    if (heard || said || content.turnComplete || content.interrupted) {
+      setTranscript((t) => {
+        let next = t;
+        if (heard) next = appendText(next, "student", heard);
+        if (said) next = appendText(next, "ai", said);
+        if (content.interrupted) next = closeTurn(next, "interrupted");
+        else if (content.turnComplete) next = closeTurn(next, "complete");
+        return next;
+      });
+    }
   }
 
   async function start() {
+    teardown();
+    const attempt = attemptRef.current;
+    const current = () => attemptRef.current === attempt;
+
     setError("");
-    setLines([]);
-    endedByUser.current = false;
+    setTranscript(EMPTY_TRANSCRIPT);
+    setAiSpeaking(false);
     setStatus("starting");
 
     // Must be created inside the click so the browser lets it make sound.
-    const player = new VoicePlayer();
+    const player = new VoicePlayer(() => {
+      if (current()) setAiSpeaking(false);
+    });
     playerRef.current = player;
     void player.resume();
 
     try {
-      const res = await fetch("/api/viva/token", { method: "POST" });
-      const body = await res.json();
+      // Ask for the mic first, so the permission prompt doesn't eat into the
+      // token's short start window. Audio before the session opens is dropped.
+      const mic = await startMic((data) => {
+        sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
+      });
+      if (!current()) return mic.stop();
+      micRef.current = mic;
+
+      const res = await fetch("/api/viva/token", {
+        method: "POST",
+        headers: passcode ? { "x-demo-code": passcode } : {},
+        signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
+      });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? `Couldn't start the viva (${res.status})`);
+      if (!current()) return;
 
       const ai = new GoogleGenAI({ apiKey: body.token, httpOptions: { apiVersion: "v1alpha" } });
-      const session = await ai.live.connect({
+      const connecting = ai.live.connect({
         model: body.model,
         config: { responseModalities: [Modality.AUDIO] },
         callbacks: {
-          onopen: () => {},
-          onmessage: handleMessage,
-          onerror: (e) => fail(e.message || "The connection to the AI failed."),
+          onmessage: (m) => {
+            if (current()) handleMessage(m);
+          },
+          // A close event always follows an error, with the real reason; report that instead.
+          onerror: () => {},
           onclose: (e) => {
-            if (endedByUser.current) return;
-            fail(e.reason ? `The viva was disconnected: ${e.reason}` : "The viva was disconnected.");
+            if (!current()) return; // we closed it, or it belongs to an older attempt
+            fail(e.reason ? `The viva was disconnected: ${e.reason}` : `The viva was disconnected (code ${e.code}).`);
           },
         },
       });
+      // If the connection opens after we gave up, close it.
+      connecting.then((s) => !current() && s.close(), () => {});
+      const session = await withTimeout(connecting, STEP_TIMEOUT_MS, "Couldn't reach the AI examiner. Check your internet and try again.");
+      if (!current()) return;
       sessionRef.current = session;
-
-      micRef.current = await startMic((data) => {
-        sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
-      });
 
       setStatus("live");
       session.sendClientContent({ turns: KICKOFF, turnComplete: true });
     } catch (err) {
-      fail(describeError(err));
+      if (current()) fail(describeError(err));
     }
   }
 
@@ -109,25 +139,33 @@ export default function VivaTestPage() {
     setAiSpeaking(false);
   }
 
+  function endWithNotice(message: string) {
+    teardown();
+    setError(message);
+    setStatus("ended");
+    setAiSpeaking(false);
+  }
+
   function stop() {
-    endedByUser.current = true;
     teardown();
     setStatus("ended");
     setAiSpeaking(false);
   }
 
+  /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
+    attemptRef.current++;
     micRef.current?.stop();
     micRef.current = null;
     const session = sessionRef.current;
     sessionRef.current = null;
-    endedByUser.current = true; // don't report our own close as an error
     session?.close();
     playerRef.current?.close();
     playerRef.current = null;
   }
 
-  const live = status === "live";
+  const running = status === "live" || status === "starting";
+  const lines = transcript.lines;
 
   return (
     <main style={styles.main}>
@@ -136,13 +174,24 @@ export default function VivaTestPage() {
         Talk with the AI examiner. Use headphones if you can, so it doesn&apos;t hear itself.
       </p>
 
-      {live ? (
+      <label style={{ display: "block", margin: "0 0 12px" }}>
+        Demo passcode (only if this server asks for one){" "}
+        <input
+          value={passcode}
+          onChange={(e) => setPasscode(e.target.value)}
+          disabled={running}
+          autoComplete="off"
+          style={{ fontSize: 16 }}
+        />
+      </label>
+
+      {running ? (
         <button onClick={stop} style={styles.button}>
-          End viva
+          {status === "starting" ? "Cancel" : "End viva"}
         </button>
       ) : (
-        <button onClick={start} disabled={status === "starting"} style={styles.button}>
-          {status === "starting" ? "Starting…" : status === "idle" ? "Start viva" : "Start again"}
+        <button onClick={start} style={styles.button}>
+          {status === "idle" ? "Start viva" : "Start again"}
         </button>
       )}
 
@@ -150,7 +199,7 @@ export default function VivaTestPage() {
         <strong>{statusLabel(status, aiSpeaking)}</strong>
       </p>
       {error && (
-        <p role="alert" style={{ color: "#b00020" }}>
+        <p role="alert" style={{ color: status === "error" ? "#b00020" : "#555" }}>
           {error}
         </p>
       )}
@@ -185,8 +234,25 @@ function describeError(err: unknown): string {
   if (err instanceof DOMException) {
     if (err.name === "NotAllowedError") return "Microphone access was blocked. Allow it in your browser and try again.";
     if (err.name === "NotFoundError") return "No microphone was found. Plug one in and try again.";
+    if (err.name === "TimeoutError") return "The server took too long to respond. Try again.";
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
 }
 
 const styles = {
