@@ -28,3 +28,7 @@ __pycache__/
 # Uploaded assignments
 backend/uploads/
 
+# Local database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
