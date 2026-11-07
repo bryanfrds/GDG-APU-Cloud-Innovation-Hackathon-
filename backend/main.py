@@ -1,75 +1,135 @@
 
 from pathlib import Path
 from uuid import uuid4
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+)
+
+from database import (
+    init_db,
+    save_submission,
+    get_submission,
+)
+
+
+# ==========================================
+# Configuration
+# ==========================================
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".py",
+    ".java",
+    ".cpp",
+    ".txt",
+}
+
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+# ==========================================
+# Database Initialization
+# ==========================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+# ==========================================
+# FastAPI Application
+# ==========================================
 
 app = FastAPI(
     title="Prove It API",
     description="AI-powered assignment viva system",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
-ALLOWED_EXTENSIONS = {".pdf", ".py", ".java", ".cpp", ".txt"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
+# ==========================================
+# Health Check
+# ==========================================
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to Prove It API"}
+    return {
+        "message": "Welcome to Prove It API"
+    }
 
 
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
-        "service": "prove-it-backend"
+        "service": "prove-it-backend",
     }
 
+
+# ==========================================
+# Upload Assignment
+# ==========================================
 
 @app.post("/api/submissions", status_code=201)
 async def create_submission(
     title: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
-    # 1. Validate assignment title
+
+    # Validate assignment title
     if not title.strip():
         raise HTTPException(
             status_code=400,
-            detail="Assignment title is required"
+            detail="Assignment title is required",
         )
 
-    # 2. Validate file extension
+    # Validate filename and extension
     original_filename = file.filename or ""
     extension = Path(original_filename).suffix.lower()
 
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type"
+            detail="Unsupported file type",
         )
 
-    # 3. Generate unique submission ID
+    # Generate unique ID
     submission_id = uuid4().hex
 
-    # 4. Prepare local storage
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # Prepare upload folder
+    UPLOAD_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     saved_filename = f"{submission_id}{extension}"
     file_path = UPLOAD_DIR / saved_filename
 
-    # 5. Save file with a size limit
     file_size = 0
 
+    # Save file locally with 10 MB limit
     try:
         with file_path.open("wb") as destination:
+
             while chunk := await file.read(1024 * 1024):
+
                 file_size += len(chunk)
 
                 if file_size > MAX_FILE_SIZE:
                     raise HTTPException(
                         status_code=413,
-                        detail="File must not exceed 10 MB"
+                        detail="File must not exceed 10 MB",
                     )
 
                 destination.write(chunk)
@@ -77,21 +137,59 @@ async def create_submission(
         if file_size == 0:
             raise HTTPException(
                 status_code=400,
-                detail="File cannot be empty"
+                detail="File cannot be empty",
             )
 
     except Exception:
         file_path.unlink(missing_ok=True)
         raise
+
     finally:
         await file.close()
 
-    # 6. Return submission information
+    # Save submission metadata to SQLite
+    try:
+        created_at = save_submission(
+            submission_id=submission_id,
+            title=title.strip(),
+            original_filename=original_filename,
+            stored_filename=saved_filename,
+            file_size_bytes=file_size,
+        )
+
+    except Exception:
+        file_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save submission record",
+        )
+
+    # Return submission details
     return {
         "submission_id": submission_id,
         "title": title.strip(),
         "original_filename": original_filename,
         "stored_filename": saved_filename,
         "file_size_bytes": file_size,
-        "status": "uploaded"
+        "status": "uploaded",
+        "created_at": created_at,
     }
+
+
+# ==========================================
+# Retrieve Submission by ID
+# ==========================================
+
+@app.get("/api/submissions/{submission_id}")
+def read_submission(submission_id: str):
+
+    submission = get_submission(submission_id)
+
+    if submission is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found",
+        )
+
+    return submission
