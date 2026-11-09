@@ -18,6 +18,10 @@ from database import (
 )
 
 
+from routes.questions import router as questions_router
+
+
+
 # ==========================================
 # Configuration
 # ==========================================
@@ -56,6 +60,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.include_router(questions_router)
+
 
 
 # ==========================================
