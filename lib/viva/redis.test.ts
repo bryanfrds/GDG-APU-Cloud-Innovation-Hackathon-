@@ -19,6 +19,16 @@ describe("redisConfig", () => {
     expect(redisConfig({ KV_REST_API_URL: "", KV_REST_API_TOKEN: "" })).toBeNull();
     expect(redisConfig({})).toBeNull();
   });
+
+  it("never mixes a URL from one pair with a token from the other, and warns once about half a pair", async () => {
+    vi.resetModules(); // the warning is once per server, so start from a fresh module
+    const { redisConfig } = await import("./redis");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(redisConfig({ KV_REST_API_URL: "https://a.upstash.io", UPSTASH_REDIS_REST_TOKEN: "u" })).toBeNull();
+    expect(redisConfig({ KV_REST_API_TOKEN: "t" })).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
 });
 
 describe("redisCommand", () => {

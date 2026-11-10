@@ -9,10 +9,6 @@ let dir = "";
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "viva-store-"));
   vi.stubEnv("VIVA_DATA_DIR", dir);
-  // Use the file store here, even if Redis variables are set in the shell.
-  for (const name of ["KV_REST_API_URL", "KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"]) {
-    vi.stubEnv(name, "");
-  }
 });
 afterEach(() => {
   vi.unstubAllEnvs();

@@ -8,6 +8,7 @@
 //   but a hosted server's disk belongs to one copy and gets wiped.
 //
 // The rest of the app only uses the functions below.
+// TODO: the file store never deletes anything; old sessions and records pile up.
 import { randomBytes } from "node:crypto";
 import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
