@@ -58,18 +58,24 @@ Hidden characters are stripped from turn text, and line breaks become spaces.
 
   It refuses (404) a `vivaId` this server never issued. It needs the demo passcode when
   `DEMO_PASSCODE` is set, and is rate-limited.
-- **Storage is JSON files under `VIVA_DATA_DIR` (default `.data/vivas`, git-ignored).** That's fine
-  locally. On Cloud Run it needs care until `lib/viva/store.ts` is swapped for Firestore:
+- **On a hosted deployment, storage is Upstash Redis** (`lib/viva/redis.ts`), used whenever
+  `KV_REST_API_URL` and `KV_REST_API_TOKEN` are set (Vercel's Upstash integration sets them; Upstash's
+  own `UPSTASH_REDIS_REST_URL` / `_TOKEN` names work too). Every server copy shares it and it survives
+  restarts. Keys are `proveit:viva:<vivaId>:session` (kept 24 hours) and `proveit:viva:<vivaId>:record`
+  (kept). A record is written with `SET … NX`, so two saves at once can't both win, and the stored
+  JSON text comes back byte for byte, so `sameRecord()` keeps working.
+- **Without those variables, storage is JSON files under `VIVA_DATA_DIR` (default `.data/vivas`,
+  git-ignored).** That's fine locally. On a hosted server it needs care:
   - **Run one instance** (`--max-instances=1`). Otherwise the save can land on a different copy of
     the server from the one that wrote the session, get a 404, and the record is lost.
   - **Set `VIVA_DATA_DIR=/tmp/vivas`**, which is always writable. If the session can't be written,
     the viva still starts, but `/api/viva/token` returns `canSave: false` and that viva can't be saved.
   - **Records don't last.** Cloud Run wipes the disk when an idle copy shuts down, so read records for
-    scoring soon after, or move to Firestore.
+    scoring soon after, or set the Redis variables.
   - The file store saves a record by writing a temporary file and hard-linking it into place, so the
     disk must support hard links. Local disks and Cloud Run's `/tmp` do; a mounted bucket folder may
     not, and then every save fails.
-  - The Firestore version must keep the plan comparison (`samePlan()`, field by field) and the
+  - Any other store (Firestore, say) must keep the plan comparison (`samePlan()`, field by field) and the
     save-once rule. The routes don't need to change, but the identical-retry check in
     `app/api/viva/records/route.ts` (`sameRecord()`) compares JSON text, so a store that returns
     keys in another order turns identical retries into 409s. Compare field by field there too.

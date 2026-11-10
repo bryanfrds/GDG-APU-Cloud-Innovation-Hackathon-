@@ -194,3 +194,48 @@ describe("POST /api/viva/records", () => {
     expect((await POST(post({}, from))).status).toBe(429);
   });
 });
+
+describe("POST /api/viva/records with Upstash Redis", () => {
+  // A fake Upstash that stores exactly the text it was sent, like the real one.
+  let data: Map<string, string>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "viva-records-redis-"));
+    vi.stubEnv("VIVA_DATA_DIR", dir);
+    vi.stubEnv("DEMO_PASSCODE", "");
+    vi.stubEnv("KV_REST_API_URL", "https://fake.upstash.io");
+    vi.stubEnv("KV_REST_API_TOKEN", "token");
+    vi.useFakeTimers({ now: ISSUED + 40_000, toFake: ["Date"] });
+    data = new Map();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const [cmd, key, value, ...opts] = JSON.parse(init.body as string) as string[];
+        if (cmd === "GET") return Response.json({ result: data.get(key) ?? null });
+        if (opts.includes("NX") && data.has(key)) return Response.json({ result: null });
+        data.set(key, value);
+        return Response.json({ result: "OK" });
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("saves to Redis, treats an identical retry as success and refuses a different record", async () => {
+    const { POST } = await loadRoute();
+    const record = await startedViva();
+    expect((await POST(post(record))).status).toBe(201);
+    const retry = await POST(post(record));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ok: true, vivaId: record.vivaId, alreadySaved: true });
+    expect((await POST(post({ ...record, endReason: "stopped" }))).status).toBe(409);
+    expect([...data.keys()].sort()).toEqual([
+      `proveit:viva:${record.vivaId}:record`,
+      `proveit:viva:${record.vivaId}:session`,
+    ]);
+  });
+});
