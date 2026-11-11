@@ -2,22 +2,59 @@
 
 // Viva test page: a spoken viva with the AI examiner, with question progress,
 // a countdown and a graceful ending. When it ends, the viva is saved to the server
-// and can be downloaded. Plain on purpose; the real screens get designed
-// separately and reuse lib/viva.
+// and can be downloaded.
 import { useEffect, useRef, useState } from "react";
-import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
-import { MIC_MIME_TYPE, startMic, VoicePlayer, type MicCapture } from "@/lib/viva/audio";
-import { addTypedLine, appendText, closeTurn, EMPTY_TRANSCRIPT, type Transcript } from "@/lib/viva/transcript";
+import {
+  GoogleGenAI,
+  Modality,
+  type LiveServerMessage,
+  type Session,
+} from "@google/genai";
+import {
+  MIC_MIME_TYPE,
+  startMic,
+  VoicePlayer,
+  type MicCapture,
+} from "@/lib/viva/audio";
+import {
+  addTypedLine,
+  appendText,
+  closeTurn,
+  EMPTY_TRANSCRIPT,
+  type Transcript,
+} from "@/lib/viva/transcript";
 import { createTypingMode, type TypingMode } from "@/lib/viva/typing";
-import { MODE_SECONDS, SAMPLE_PLAN, type VivaMode, type VivaPlan } from "@/lib/viva/plan";
+import {
+  MODE_SECONDS,
+  SAMPLE_PLAN,
+  type VivaMode,
+  type VivaPlan,
+} from "@/lib/viva/plan";
 import { createEnding, startCountdown, type Ending } from "@/lib/viva/ending";
 import { answerToolCalls } from "@/lib/viva/tool-calls";
 import type { EndReason, VivaRecord } from "@/lib/viva/record";
 import { recordFileName, sendRecord } from "@/lib/viva/save";
-import { MAX_TYPED_CHARS, prepareTypedAnswer, typedAnswerMessage } from "@/lib/viva/typed-answer";
-import { createVivaFinisher, IDLE_STATE, type Finisher, type FinisherState, type SaveState } from "@/lib/viva/finisher";
+import {
+  MAX_TYPED_CHARS,
+  prepareTypedAnswer,
+  typedAnswerMessage,
+} from "@/lib/viva/typed-answer";
+import {
+  createVivaFinisher,
+  IDLE_STATE,
+  type Finisher,
+  type FinisherState,
+  type SaveState,
+} from "@/lib/viva/finisher";
 
-type Status = "idle" | "starting" | "live" | "closing" | "ended" | "cancelled" | "error";
+type Status =
+  | "idle"
+  | "starting"
+  | "live"
+  | "closing"
+  | "ended"
+  | "cancelled"
+  | "error";
 
 const STEP_TIMEOUT_MS = 15000;
 const KICKOFF = "The student is ready. Begin the viva.";
@@ -38,32 +75,29 @@ export default function VivaTestPage() {
   const [typed, setTyped] = useState("");
   const [typedError, setTypedError] = useState("");
   const [muted, setMuted] = useState(false);
-  // While typing, the mic is paused: mixing a silent audio stream with typed answers
-  // makes Gemini think the student said nothing, and it moves on or answers itself.
+
   const [typingMode, setTypingMode] = useState(false);
   const typingRef = useRef<TypingMode | null>(null);
-  typingRef.current ??= createTypingMode(() => sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }));
+  typingRef.current ??= createTypingMode(() =>
+    sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }),
+  );
   const typing = typingRef.current;
   const typedInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   const sessionRef = useRef<Session | null>(null);
   const planRef = useRef<VivaPlan | null>(null);
   const micRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<VoicePlayer | null>(null);
-  // Each Start gets a new number. Anything from an older attempt (a late close
-  // event, a slow mic prompt) sees it's no longer current and cleans up quietly.
   const attemptRef = useRef(0);
-  // The current viva's graceful ending (time-up, end_viva or Gemini's goAway).
-  // While it's closing, the connection dropping is expected, not an error.
   const endingRef = useRef<Ending | null>(null);
   const stopCountdownRef = useRef<(() => void) | null>(null);
-  // Refs, not state, so tags and the saved record are current inside event handlers.
   const startedAtRef = useRef(0);
   const questionIdRef = useRef<string | null>(null);
   const transcriptRef = useRef<Transcript>(EMPTY_TRANSCRIPT);
   const passcodeRef = useRef("");
   passcodeRef.current = passcode;
-  // Builds and saves each viva's record once, with the right end reason (lib/viva/finisher.ts).
+
   const finisherRef = useRef<Finisher | null>(null);
   finisherRef.current ??= createVivaFinisher({
     save: (record) => sendRecord(record, passcodeRef.current),
@@ -71,8 +105,6 @@ export default function VivaTestPage() {
   });
   const finisher = finisherRef.current;
 
-  // Clean up the mic and connection if the page is closed mid-viva.
-  // Closing the page mid-viva doesn't save it: there's no reliable moment to send it.
   useEffect(
     () => () => {
       finisherRef.current?.reset();
@@ -81,20 +113,26 @@ export default function VivaTestPage() {
     [], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // Auto-scroll transcript as new lines arrive
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [transcript.lines]);
+
   function handleMessage(msg: LiveServerMessage) {
     if (msg.goAway) {
-      // Gemini warns that it will close the connection soon.
-      wrapUp("The session is ending, so the viva has stopped here.", "session_ended");
+      wrapUp(
+        "The session is ending, so the viva has stopped here.",
+        "session_ended",
+      );
       return;
     }
     if (msg.toolCall) {
-      // The examiner reports progress and waits for a reply before it carries on.
       const functionResponses = answerToolCalls(msg.toolCall.functionCalls, {
         onStartQuestion: (id) => {
           questionIdRef.current = id;
           setQuestionId(id);
         },
-        onEndViva: () => wrapUp("Viva complete. Thank you!", "completed"),
+        onEndViva: () => wrapUp("Examination complete.", "completed"),
         knownQuestionIds: planRef.current?.questions.map((q) => q.id),
       });
       sessionRef.current?.sendToolResponse({ functionResponses });
@@ -104,8 +142,6 @@ export default function VivaTestPage() {
     if (!content) return;
 
     if (content.interrupted) {
-      // The student started talking over the AI: stop its voice straight away
-      // and drop any audio that came with this message.
       playerRef.current?.interrupt();
     } else {
       for (const part of content.modelTurn?.parts ?? []) {
@@ -120,8 +156,10 @@ export default function VivaTestPage() {
     const heard = content.inputTranscription?.text;
     const said = content.outputTranscription?.text;
     if (heard || said || content.turnComplete || content.interrupted) {
-      // Tag new lines with the question being asked now and the time since the viva began.
-      const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAtRef.current };
+      const meta = {
+        questionId: questionIdRef.current,
+        atMs: Date.now() - startedAtRef.current,
+      };
       let next = transcriptRef.current;
       if (heard) next = appendText(next, "student", heard, meta);
       if (said) next = appendText(next, "ai", said, meta);
@@ -148,7 +186,6 @@ export default function VivaTestPage() {
     setSecondsLeft(null);
     setStatus("starting");
 
-    // Must be created inside the click so the browser lets it make sound.
     const player = new VoicePlayer(() => {
       if (current()) setAiSpeaking(false);
     });
@@ -158,32 +195,40 @@ export default function VivaTestPage() {
     endingRef.current = createEnding({
       isPlaying: () => player.isPlaying(),
       onFinish: (notice) => {
-        // The finisher already knows why it's wrapping up, so the reason here is only a fallback.
         if (current()) endWithNotice(notice, "completed");
       },
     });
 
     try {
-      // Ask for the mic first, so the permission prompt doesn't eat into the
-      // token's short start window. Audio before the session opens is dropped.
       const mic = await startMic((data) => {
-        if (!typing.active) sessionRef.current?.sendRealtimeInput({ audio: { data, mimeType: MIC_MIME_TYPE } });
+        if (!typing.active)
+          sessionRef.current?.sendRealtimeInput({
+            audio: { data, mimeType: MIC_MIME_TYPE },
+          });
       });
       if (!current()) return mic.stop();
       micRef.current = mic;
 
       const res = await fetch("/api/viva/token", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(passcode ? { "x-demo-code": passcode } : {}) },
-        // TODO(Person 1): send the submission id instead, once questions come from the real work.
+        headers: {
+          "content-type": "application/json",
+          ...(passcode ? { "x-demo-code": passcode } : {}),
+        },
         body: JSON.stringify({ plan: SAMPLE_PLAN, mode }),
         signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? `Couldn't start the viva (${res.status})`);
+      if (!res.ok)
+        throw new Error(
+          body.error ?? `Couldn't start the viva (${res.status})`,
+        );
       if (!current()) return;
 
-      const ai = new GoogleGenAI({ apiKey: body.token, httpOptions: { apiVersion: "v1alpha" } });
+      const ai = new GoogleGenAI({
+        apiKey: body.token,
+        httpOptions: { apiVersion: "v1alpha" },
+      });
       const connecting = ai.live.connect({
         model: body.model,
         config: { responseModalities: [Modality.AUDIO] },
@@ -191,23 +236,30 @@ export default function VivaTestPage() {
           onmessage: (m) => {
             if (current()) handleMessage(m);
           },
-          // A close event always follows an error, with the real reason; report that instead.
           onerror: () => {},
           onclose: (e) => {
-            if (!current()) return; // we closed it, or it belongs to an older attempt
+            if (!current()) return;
             if (endingRef.current?.closing) {
-              // Expected while wrapping up. Local playback keeps going, and the
-              // ending closes the page once the examiner has finished speaking.
               sessionRef.current = null;
               return;
             }
-            fail(e.reason ? `The viva was disconnected: ${e.reason}` : `The viva was disconnected (code ${e.code}).`);
+            fail(
+              e.reason
+                ? `The viva was disconnected: ${e.reason}`
+                : `The viva was disconnected (code ${e.code}).`,
+            );
           },
         },
       });
-      // If the connection opens after we gave up, close it.
-      connecting.then((s) => !current() && s.close(), () => {});
-      const session = await withTimeout(connecting, STEP_TIMEOUT_MS, "Couldn't reach the AI examiner. Check your internet and try again.");
+      connecting.then(
+        (s) => !current() && s.close(),
+        () => {},
+      );
+      const session = await withTimeout(
+        connecting,
+        STEP_TIMEOUT_MS,
+        "Couldn't reach the AI examiner. Check your internet and try again.",
+      );
       if (!current()) return;
       sessionRef.current = session;
 
@@ -215,8 +267,9 @@ export default function VivaTestPage() {
       startedAtRef.current = Date.now();
       const hasId = typeof body.vivaId === "string";
       finisher.begin({
-        // Without a server id the record can still be downloaded, under a local one.
-        vivaId: hasId ? body.vivaId : `unsaved_${startedAtRef.current.toString(36)}`,
+        vivaId: hasId
+          ? body.vivaId
+          : `unsaved_${startedAtRef.current.toString(36)}`,
         canSave: hasId && body.canSave !== false,
         mode: body.mode === "demo" ? "demo" : "full",
         plan: body.plan,
@@ -224,26 +277,35 @@ export default function VivaTestPage() {
       });
       setPlan(body.plan);
       setStatus("live");
-      stopCountdownRef.current = startCountdown(Number(body.seconds) || MODE_SECONDS[mode], setSecondsLeft, timeUp);
+      stopCountdownRef.current = startCountdown(
+        Number(body.seconds) || MODE_SECONDS[mode],
+        setSecondsLeft,
+        timeUp,
+      );
       session.sendClientContent({ turns: KICKOFF, turnComplete: true });
     } catch (err) {
       if (current()) fail(describeError(err));
     }
   }
 
-  /** The countdown ran out: stop listening and ask the examiner to close. */
   function timeUp() {
     stopListening();
-    // Tell Gemini the student's audio has ended, so it isn't waiting for the rest of a sentence.
     sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
-    sessionRef.current?.sendClientContent({ turns: TIME_UP, turnComplete: true });
-    // Wait for the examiner to start its thank-you, then for it to finish.
-    wrapUp("Time's up. The viva has ended.", "time_up", { waitForSpeech: true });
+    sessionRef.current?.sendClientContent({
+      turns: TIME_UP,
+      turnComplete: true,
+    });
+    wrapUp("Time's up. The viva has ended.", "time_up", {
+      waitForSpeech: true,
+    });
   }
 
-  /** Ends the viva gracefully: stop listening, then let the examiner finish speaking. */
-  function wrapUp(notice: string, reason: EndReason, opts?: { waitForSpeech?: boolean }) {
-    if (!endingRef.current?.wrapUp(notice, opts)) return; // already ending
+  function wrapUp(
+    notice: string,
+    reason: EndReason,
+    opts?: { waitForSpeech?: boolean },
+  ) {
+    if (!endingRef.current?.wrapUp(notice, opts)) return;
     finisher.wrappingUp(reason);
     stopListening();
     setStatus("closing");
@@ -274,7 +336,6 @@ export default function VivaTestPage() {
 
   function stop() {
     const wasStarting = status === "starting";
-    // If the examiner was already saying goodbye, the finisher keeps that reason instead.
     finisher.finish("stopped", transcriptRef.current);
     teardown();
     setStatus(wasStarting ? "cancelled" : "ended");
@@ -282,34 +343,34 @@ export default function VivaTestPage() {
   }
 
   function download(toSave: VivaRecord) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(toSave, null, 2)], { type: "application/json" }));
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(toSave, null, 2)], { type: "application/json" }),
+    );
     const a = document.createElement("a");
     a.href = url;
     a.download = recordFileName(toSave);
-    // Older Safari and Firefox only download from a link that's on the page.
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
-  /** Sends a typed answer into the live viva, instead of speaking. */
   function sendTyped(e: React.FormEvent) {
     e.preventDefault();
     const session = sessionRef.current;
-    // Not while wrapping up: the examiner is saying goodbye and the mic is off.
     if (!session || status !== "live" || endingRef.current?.closing) return;
     const prepared = prepareTypedAnswer(typed);
     if ("error" in prepared) {
       setTypedError(prepared.error);
       return;
     }
-    // If the examiner is mid-sentence, the student is answering over it: stop its voice.
     playerRef.current?.interrupt();
     switchTyping(true);
     session.sendClientContent(typedAnswerMessage(prepared.text));
-    // Typed answers don't come back as speech transcription, so add them to the transcript here, marked as typed.
-    const meta = { questionId: questionIdRef.current, atMs: Date.now() - startedAtRef.current };
+    const meta = {
+      questionId: questionIdRef.current,
+      atMs: Date.now() - startedAtRef.current,
+    };
     const next = addTypedLine(transcriptRef.current, prepared.text, meta);
     transcriptRef.current = next;
     setTranscript(next);
@@ -317,7 +378,6 @@ export default function VivaTestPage() {
     setTypedError("");
   }
 
-  /** Switches between answering by typing (mic paused) and by speaking. */
   function switchTyping(on: boolean) {
     if (typing.set(on)) setTypingMode(on);
   }
@@ -327,7 +387,6 @@ export default function VivaTestPage() {
     playerRef.current?.setMuted(next);
   }
 
-  /** Stops everything from the current attempt and marks it as finished. */
   function teardown() {
     attemptRef.current++;
     typing.reset();
@@ -344,186 +403,406 @@ export default function VivaTestPage() {
     playerRef.current = null;
   }
 
-  const running = status === "live" || status === "starting" || status === "closing";
-  const questionIndex = plan && questionId ? plan.questions.findIndex((q) => q.id === questionId) : -1;
+  const running =
+    status === "live" || status === "starting" || status === "closing";
+  const questionIndex =
+    plan && questionId
+      ? plan.questions.findIndex((q) => q.id === questionId)
+      : -1;
   const question = questionIndex >= 0 ? plan!.questions[questionIndex] : null;
-  const lines = transcript.lines;
+  const lines = transcript.lines.filter((line) => line.text.trim().length > 0);
   const { record, saveState, saveError } = finished;
+  const badgeStyle = getStatusBadgeStyle(status, aiSpeaking, typingMode);
 
   return (
-    <main style={styles.main}>
-      <h1 style={{ marginBottom: 4 }}>Viva test</h1>
-      <p style={{ marginTop: 0, color: "#555" }}>
-        Talk with the AI examiner. Use headphones if you can, so it doesn&apos;t hear itself.
-      </p>
-
-      <label style={{ display: "block", margin: "0 0 12px" }}>
-        Demo passcode (only if this server asks for one){" "}
-        <input
-          value={passcode}
-          onChange={(e) => setPasscode(e.target.value)}
-          disabled={running}
-          type="password"
-          autoComplete="off"
-          style={{ fontSize: 16 }}
-        />
-      </label>
-
-      <fieldset style={styles.fieldset} disabled={running}>
-        <legend>Length</legend>
-        <label>
-          <input type="radio" name="mode" checked={mode === "full"} onChange={() => setMode("full")} /> Full viva ({formatLength(MODE_SECONDS.full)})
-        </label>{" "}
-        <label>
-          <input type="radio" name="mode" checked={mode === "demo"} onChange={() => setMode("demo")} /> Demo ({formatLength(MODE_SECONDS.demo)})
-        </label>
-      </fieldset>
-
-      {running ? (
-        <button onClick={stop} style={styles.button}>
-          {status === "starting" ? "Cancel" : "End viva"}
-        </button>
-      ) : (
-        <button onClick={start} style={styles.button}>
-          {status === "idle" ? "Start viva" : "Start again"}
-        </button>
-      )}
-
-      <label style={{ display: "block", margin: "0 0 12px" }}>
-        <input type="checkbox" checked={muted} onChange={(e) => toggleMute(e.target.checked)} /> Mute the
-        examiner&apos;s voice (read its questions below instead)
-      </label>
-
-      <p data-testid="status" aria-live="polite" style={{ margin: "12px 0" }}>
-        <strong>{statusLabel(status, aiSpeaking, typingMode)}</strong>
-      </p>
-      {plan && (status === "live" || status === "closing") && (
-        <div data-testid="progress" style={styles.progress}>
-          <span>
-            {question ? (
-              <>
-                <strong>
-                  Question {questionIndex + 1} of {plan.questions.length}:
-                </strong>{" "}
-                {question.text}
-              </>
-            ) : (
-              plan.assignmentTitle
-            )}
-          </span>
-          {secondsLeft !== null && status === "live" && (
-            <span data-testid="timer" role="timer" style={{ whiteSpace: "nowrap" }}>
-              {formatTime(secondsLeft)} left
-            </span>
-          )}
-        </div>
-      )}
-      {error && (
-        <p role="alert" style={{ color: status === "error" ? "#b00020" : "#555" }}>
-          {error}
-        </p>
-      )}
-
-      {status === "live" && (
-        <form onSubmit={sendTyped} style={styles.typed} aria-label="Type an answer">
-          <label htmlFor="typed-answer" style={{ display: "block", marginBottom: 4 }}>
-            Prefer typing, or is the audio struggling? Type your answer:
-          </label>
-          <textarea
-            id="typed-answer"
-            ref={typedInputRef}
-            value={typed}
-            onChange={(e) => {
-              setTyped(e.target.value);
-              if (typedError) setTypedError("");
+    <div style={styles.page}>
+      <main style={styles.card}>
+        {/* Header */}
+        <header style={styles.header}>
+          <div>
+            <h1 style={styles.title}>AI Oral Examination</h1>
+          </div>
+          <div
+            data-testid="status"
+            aria-live="polite"
+            style={{
+              ...styles.statusBadge,
+              backgroundColor: badgeStyle.bg,
+              color: badgeStyle.fg,
+              borderColor: badgeStyle.border,
             }}
-            onKeyDown={(e) => {
-              // Enter sends; Shift+Enter adds a new line.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-            rows={2}
-            maxLength={MAX_TYPED_CHARS * 2}
-            aria-invalid={typedError ? true : undefined}
-            aria-describedby={`typed-count${typedError ? " typed-error" : ""}`}
-            style={{ width: "100%", boxSizing: "border-box", fontSize: 16, fontFamily: "inherit" }}
-          />
-          <span style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-            <span id="typed-count" style={{ color: typed.length > MAX_TYPED_CHARS ? "#b00020" : "#555", fontSize: 14 }}>
-              {typed.length}/{MAX_TYPED_CHARS}
-            </span>
-            <button type="submit">Send</button>
-          </span>
-          {typedError && (
-            <span id="typed-error" role="alert" style={{ color: "#b00020", display: "block", marginTop: 4 }}>
-              {typedError}
-            </span>
-          )}
-          {typingMode && (
-            <span style={{ display: "block", marginTop: 6, color: "#555" }}>
-              Mic paused while you type; anything you say isn't heard.{" "}
+          >
+            <span
+              style={{ ...styles.statusDot, backgroundColor: badgeStyle.dot }}
+            />
+            <strong>{statusLabel(status, aiSpeaking, typingMode)}</strong>
+          </div>
+        </header>
+
+        {/* Pre-session Setup */}
+        <section style={styles.setupPanel}>
+          <div style={styles.setupGrid}>
+            <div style={styles.fieldGroup}>
+              <label htmlFor="demo-passcode" style={styles.label}>
+                Demo passcode <span style={styles.mutedText}>(optional)</span>
+              </label>
+              <input
+                id="demo-passcode"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                disabled={running}
+                type="password"
+                placeholder="Enter server code if required"
+                autoComplete="off"
+                style={{ ...styles.input, ...(running ? styles.disabled : {}) }}
+              />
+            </div>
+
+            <fieldset style={styles.fieldset} disabled={running}>
+              <legend style={styles.label}>Session length</legend>
+              <div style={styles.radioRow}>
+                <label
+                  style={{
+                    ...styles.radioPill,
+                    ...(mode === "full" ? styles.radioPillActive : {}),
+                    ...(running ? styles.disabled : {}),
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "full"}
+                    onChange={() => setMode("full")}
+                    style={styles.hiddenRadio}
+                  />
+                  Full viva ({formatLength(MODE_SECONDS.full)})
+                </label>
+                <label
+                  style={{
+                    ...styles.radioPill,
+                    ...(mode === "demo" ? styles.radioPillActive : {}),
+                    ...(running ? styles.disabled : {}),
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "demo"}
+                    onChange={() => setMode("demo")}
+                    style={styles.hiddenRadio}
+                  />
+                  Demo ({formatLength(MODE_SECONDS.demo)})
+                </label>
+              </div>
+            </fieldset>
+          </div>
+
+          <div style={styles.actionBar}>
+            {running ? (
               <button
-                type="button"
-                onClick={() => {
-                  switchTyping(false);
-                  typedInputRef.current?.focus(); // keep focus in the form, not lost on the page
+                onClick={stop}
+                style={{
+                  ...styles.primaryBtn,
+                  ...(status === "starting"
+                    ? styles.neutralBtn
+                    : styles.dangerBtn),
                 }}
               >
-                Speak instead
+                {status === "starting" ? "Cancel" : "End viva"}
               </button>
-            </span>
-          )}
-        </form>
-      )}
-
-      {record && !running && (
-        <div data-testid="save" style={styles.save}>
-          <span>
-            {saveLabel(saveState, record)}
-            {saveError && ` ${saveError.message}`}
-          </span>
-          <span style={{ display: "flex", gap: 8 }}>
-            {saveState === "failed" && saveError?.canRetry && (
-              <button onClick={() => finisher.retry()}>Try saving again</button>
+            ) : (
+              <button onClick={start} style={styles.primaryBtn}>
+                {status === "idle" ? "Start viva" : "Start again"}
+              </button>
             )}
-            <button onClick={() => download(record)}>Download transcript</button>
-          </span>
-        </div>
-      )}
 
-      <section aria-label="Conversation" data-testid="transcript">
-        {lines.map((line, i) =>
-          // A line can be empty while Gemini's first chunk was only leaked tags.
-          line.text.trim() ? (
-            <p key={i} style={line.who === "ai" ? styles.ai : styles.student}>
-              <strong>{line.who === "ai" ? "Examiner" : "You"}:</strong> {line.text}
-            </p>
-          ) : null,
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={muted}
+                onChange={(e) => toggleMute(e.target.checked)}
+                style={styles.checkbox}
+              />
+              <span>Mute examiner voice</span>
+            </label>
+          </div>
+        </section>
+
+        {/* Active Question & Timer Banner */}
+        {plan && (status === "live" || status === "closing") && (
+          <div data-testid="progress" style={styles.progressBanner}>
+            <div style={{ flex: 1 }}>
+              {question ? (
+                <>
+                  <span style={styles.questionPill}>
+                    Question {questionIndex + 1} of {plan.questions.length}
+                  </span>
+                  <p style={styles.questionText}>{question.text}</p>
+                </>
+              ) : (
+                <p style={styles.questionText}>{plan.assignmentTitle}</p>
+              )}
+            </div>
+            {secondsLeft !== null && status === "live" && (
+              <div
+                data-testid="timer"
+                role="timer"
+                style={{
+                  ...styles.timerBox,
+                  ...(secondsLeft <= 30 ? styles.timerUrgent : {}),
+                }}
+              >
+                <span style={styles.timerLabel}>TIME LEFT</span>
+                <span style={styles.timerValue}>{formatTime(secondsLeft)}</span>
+              </div>
+            )}
+          </div>
         )}
-      </section>
-    </main>
+
+        {/* Notice / Error Alert */}
+        {error && (
+          <div
+            role="alert"
+            style={{
+              ...styles.alertBanner,
+              ...(status === "error" ? styles.alertError : styles.alertNotice),
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Save & Download Bar */}
+        {record && !running && (
+          <div data-testid="save" style={styles.saveBanner}>
+            <span style={styles.saveText}>
+              {saveLabel(saveState, record)}
+              {saveError && ` ${saveError.message}`}
+            </span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {saveState === "failed" && saveError?.canRetry && (
+                <button
+                  onClick={() => finisher.retry()}
+                  style={styles.secondaryBtn}
+                >
+                  Try saving again
+                </button>
+              )}
+              <button
+                onClick={() => download(record)}
+                style={styles.secondaryBtn}
+              >
+                Download transcript
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Live Transcript Feed */}
+        <section
+          aria-label="Conversation"
+          data-testid="transcript"
+          style={styles.transcriptSection}
+        >
+          <div style={styles.transcriptHeader}>
+            <span style={styles.sectionHeading}>Transcript</span>
+            <span style={styles.mutedText}>
+              {lines.length === 0
+                ? "No messages yet"
+                : `${lines.length} message${lines.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+
+          <div style={styles.transcriptList}>
+            {lines.length === 0 ? (
+              <div style={styles.emptyTranscript}>
+                {running
+                  ? "The examiner will introduce the session shortly…"
+                  : "Start the viva to begin your conversation with the AI examiner."}
+              </div>
+            ) : (
+              lines.map((line, i) => {
+                const isAi = line.who === "ai";
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      ...styles.messageRow,
+                      justifyContent: isAi ? "flex-start" : "flex-end",
+                    }}
+                  >
+                    <div
+                      style={{
+                        ...styles.messageBubble,
+                        ...(isAi ? styles.aiBubble : styles.studentBubble),
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...styles.senderTag,
+                          color: isAi ? "#475569" : "#dbeafe",
+                        }}
+                      >
+                        {isAi ? "Examiner" : "You"}
+                      </div>
+                      <div style={styles.messageBody}>{line.text}</div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div ref={transcriptEndRef} />
+          </div>
+        </section>
+
+        {/* Typed Answer Fallback Form */}
+        {status === "live" && (
+          <form
+            onSubmit={sendTyped}
+            style={styles.typedForm}
+            aria-label="Type an answer"
+          >
+            <div style={styles.typedHeader}>
+              <label htmlFor="typed-answer" style={styles.label}>
+                Type your answer{" "}
+                <span style={styles.mutedText}>(optional fallback)</span>
+              </label>
+              {typingMode && (
+                <span style={styles.micPausedBadge}>
+                  Mic paused ·{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      switchTyping(false);
+                      typedInputRef.current?.focus();
+                    }}
+                    style={styles.linkBtn}
+                  >
+                    Speak instead
+                  </button>
+                </span>
+              )}
+            </div>
+
+            <textarea
+              id="typed-answer"
+              ref={typedInputRef}
+              value={typed}
+              onChange={(e) => {
+                setTyped(e.target.value);
+                if (typedError) setTypedError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Write your response here (Enter to send, Shift+Enter for new line)…"
+              rows={2}
+              maxLength={MAX_TYPED_CHARS * 2}
+              aria-invalid={typedError ? true : undefined}
+              aria-describedby={`typed-count${typedError ? " typed-error" : ""}`}
+              style={styles.textarea}
+            />
+
+            <div style={styles.typedFooter}>
+              <span
+                id="typed-count"
+                style={{
+                  fontSize: 13,
+                  color: typed.length > MAX_TYPED_CHARS ? "#dc2626" : "#64748b",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {typed.length}/{MAX_TYPED_CHARS}
+              </span>
+              <button type="submit" style={styles.sendBtn}>
+                Send answer
+              </button>
+            </div>
+
+            {typedError && (
+              <span id="typed-error" role="alert" style={styles.inlineError}>
+                {typedError}
+              </span>
+            )}
+          </form>
+        )}
+      </main>
+    </div>
   );
+}
+
+function getStatusBadgeStyle(
+  status: Status,
+  aiSpeaking: boolean,
+  typingMode: boolean,
+) {
+  switch (status) {
+    case "live":
+      if (aiSpeaking)
+        return {
+          bg: "#eff6ff",
+          fg: "#1d4ed8",
+          border: "#bfdbfe",
+          dot: "#2563eb",
+        };
+      if (typingMode)
+        return {
+          bg: "#fefce8",
+          fg: "#a16207",
+          border: "#fef08a",
+          dot: "#ca8a04",
+        };
+      return {
+        bg: "#f0fdf4",
+        fg: "#15803d",
+        border: "#bbf7d0",
+        dot: "#16a34a",
+      };
+    case "starting":
+    case "closing":
+      return {
+        bg: "#fffbeb",
+        fg: "#b45309",
+        border: "#fde68a",
+        dot: "#d97706",
+      };
+    case "error":
+      return {
+        bg: "#fef2f2",
+        fg: "#b91c1c",
+        border: "#fecaca",
+        dot: "#dc2626",
+      };
+    default:
+      return {
+        bg: "#f1f5f9",
+        fg: "#475569",
+        border: "#e2e8f0",
+        dot: "#94a3b8",
+      };
+  }
 }
 
 function statusLabel(status: Status, aiSpeaking: boolean, typingMode: boolean) {
   switch (status) {
     case "idle":
-      return "Not started";
+      return "Ready";
     case "starting":
-      return "Starting: allow the microphone if your browser asks…";
+      return "Allow microphone…";
     case "live":
-      if (aiSpeaking) return "Examiner is speaking…";
-      return typingMode ? "Mic paused: type your answer below." : "Listening…";
+      if (aiSpeaking) return "Examiner speaking…";
+      return typingMode ? "Mic paused (typing)" : "Listening…";
     case "closing":
       return "Wrapping up…";
     case "ended":
-      return "Viva ended";
+      return "Session finished";
     case "cancelled":
       return "Cancelled";
     case "error":
-      return "Something went wrong";
+      return "Connection error";
   }
 }
 
@@ -531,13 +810,13 @@ function saveLabel(state: SaveState, record: VivaRecord) {
   const turns = `${record.turns.length} line${record.turns.length === 1 ? "" : "s"}`;
   switch (state) {
     case "saving":
-      return `Saving the viva (${turns})…`;
+      return `Saving the transcript (${turns})…`;
     case "saved":
       return `Saved (${turns}).`;
     case "failed":
-      return "Couldn't save the viva.";
+      return "Couldn't save the examination transcript.";
     case "off":
-      return `This viva can't be saved on this server (${turns}); download it instead.`;
+      return `This transcript can't be saved on this server (${turns}); download it instead.`;
     default:
       return "";
   }
@@ -553,16 +832,25 @@ function formatTime(seconds: number) {
 
 function describeError(err: unknown): string {
   if (err instanceof DOMException) {
-    if (err.name === "NotAllowedError") return "Microphone access was blocked. Allow it in your browser and try again.";
-    if (err.name === "NotFoundError") return "No microphone was found. Plug one in and try again.";
-    if (err.name === "NotReadableError") return "Your microphone is being used by another app. Close it and try again.";
-    if (err.name === "InsecureContextError") return "The microphone only works on a secure (https) page.";
-    if (err.name === "TimeoutError") return "The server took too long to respond. Try again.";
+    if (err.name === "NotAllowedError")
+      return "Microphone access was blocked. Allow it in your browser and try again.";
+    if (err.name === "NotFoundError")
+      return "No microphone was found. Plug one in and try again.";
+    if (err.name === "NotReadableError")
+      return "Your microphone is being used by another app. Close it and try again.";
+    if (err.name === "InsecureContextError")
+      return "The microphone only works on a secure (https) page.";
+    if (err.name === "TimeoutError")
+      return "The server took too long to respond. Try again.";
   }
   return err instanceof Error ? err.message : String(err);
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms);
     p.then(
@@ -579,32 +867,398 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 }
 
 const styles = {
-  main: { fontFamily: "system-ui, sans-serif", maxWidth: 560, margin: "48px auto", padding: "0 16px" },
-  button: { fontSize: 16, padding: "10px 18px", cursor: "pointer" },
-  ai: { background: "#f2f2f2", padding: "8px 12px", borderRadius: 8 },
-  student: { padding: "8px 12px" },
-  typed: { border: "1px solid #e5e5e5", borderRadius: 8, padding: "8px 12px", margin: "0 0 12px" },
-  save: {
+  page: {
+    minHeight: "100vh",
+    backgroundColor: "#f8fafc",
+    color: "#0f172a",
+    fontFamily:
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+    padding: "32px 16px",
+    boxSizing: "border-box",
+  },
+  card: {
+    maxWidth: 680,
+    margin: "0 auto",
+    backgroundColor: "#ffffff",
+    border: "1px solid #e2e8f0",
+    boxShadow: "0 4px 20px rgba(15, 23, 42, 0.05)",
+    padding: 24,
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
+  },
+  header: {
     display: "flex",
     flexWrap: "wrap",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    borderBottom: "1px solid #f1f5f9",
+    paddingBottom: 16,
+  },
+  title: {
+    margin: 0,
+    fontSize: 22,
+    fontWeight: 700,
+    letterSpacing: "-0.02em",
+    color: "#0f172a",
+  },
+  subtitle: {
+    margin: "4px 0 0",
+    fontSize: 14,
+    color: "#64748b",
+  },
+  statusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
     gap: 8,
+    padding: "6px 12px",
+    borderRadius: 999,
+    fontSize: 13,
+    border: "1px solid",
+    whiteSpace: "nowrap",
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+  },
+  setupPanel: {
+    backgroundColor: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    padding: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+  },
+  setupGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 16,
+    alignItems: "end",
+  },
+  fieldGroup: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#334155",
+  },
+  mutedText: {
+    fontWeight: 400,
+    color: "#64748b",
+    fontSize: 13,
+  },
+  input: {
+    fontSize: 14,
+    padding: "8px 12px",
+    border: "1px solid #cbd5e1",
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    outline: "none",
+  },
+  fieldset: {
+    border: "none",
+    padding: 0,
+    margin: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  radioRow: {
+    display: "flex",
+    gap: 8,
+  },
+  radioPill: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 13,
+    fontWeight: 500,
+    padding: "8px 10px",
+    border: "1px solid #cbd5e1",
+    backgroundColor: "#ffffff",
+    color: "#475569",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  radioPillActive: {
+    borderColor: "#2563eb",
+    backgroundColor: "#eff6ff",
+    color: "#1d4ed8",
+    fontWeight: 600,
+  },
+  hiddenRadio: {
+    position: "absolute",
+    opacity: 0,
+    pointerEvents: "none",
+  },
+  disabled: {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
+  actionBar: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingTop: 4,
+  },
+  primaryBtn: {
+    fontSize: 14,
+    fontWeight: 600,
+    padding: "10px 20px",
+    border: "none",
+    backgroundColor: "#2563eb",
+    color: "#ffffff",
+    cursor: "pointer",
+    boxShadow: "0 1px 2px rgba(37, 99, 235, 0.2)",
+  },
+  dangerBtn: {
+    backgroundColor: "#dc2626",
+    boxShadow: "0 1px 2px rgba(220, 38, 38, 0.2)",
+  },
+  neutralBtn: {
+    backgroundColor: "#475569",
+    boxShadow: "none",
+  },
+  checkboxLabel: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 14,
+    color: "#475569",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  checkbox: {
+    width: 16,
+    height: 16,
+    accentColor: "#2563eb",
+    cursor: "pointer",
+  },
+  progressBanner: {
+    display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    border: "1px solid #e5e5e5",
-    borderRadius: 8,
-    padding: "8px 12px",
-    margin: "0 0 12px",
+    gap: 16,
+    backgroundColor: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    padding: 16,
   },
-  fieldset: { border: "1px solid #ddd", borderRadius: 8, margin: "0 0 12px", padding: "8px 12px" },
-  progress: {
+  questionPill: {
+    display: "inline-block",
+    fontSize: 12,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    color: "#1d4ed8",
+    marginBottom: 4,
+  },
+  questionText: {
+    margin: 0,
+    fontSize: 15,
+    fontWeight: 500,
+    lineHeight: 1.45,
+    color: "#1e3a8a",
+  },
+  timerBox: {
     display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    border: "1px solid #bfdbfe",
+    padding: "8px 14px",
+    minWidth: 76,
+  },
+  timerUrgent: {
+    backgroundColor: "#fef2f2",
+    borderColor: "#fecaca",
+    color: "#dc2626",
+  },
+  timerLabel: {
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    opacity: 0.75,
+  },
+  timerValue: {
+    fontSize: 18,
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+  },
+  alertBanner: {
+    padding: "12px 16px",
+    fontSize: 14,
+    lineHeight: 1.4,
+  },
+  alertError: {
+    backgroundColor: "#fef2f2",
+    border: "1px solid #fecaca",
+    color: "#b91c1c",
+  },
+  alertNotice: {
+    backgroundColor: "#f1f5f9",
+    border: "1px solid #cbd5e1",
+    color: "#334155",
+  },
+  saveBanner: {
+    display: "flex",
+    flexWrap: "wrap",
     gap: 12,
     justifyContent: "space-between",
-    alignItems: "baseline",
-    background: "#f7f7f7",
-    border: "1px solid #e5e5e5",
+    alignItems: "center",
+    backgroundColor: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    padding: "12px 16px",
+  },
+  saveText: {
+    fontSize: 14,
+    fontWeight: 500,
+    color: "#166534",
+  },
+  secondaryBtn: {
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "7px 14px",
+    border: "1px solid #cbd5e1",
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    cursor: "pointer",
+  },
+  transcriptSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  transcriptHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  sectionHeading: {
+    fontSize: 13,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    color: "#64748b",
+  },
+  transcriptList: {
+    minHeight: 180,
+    maxHeight: 380,
+    overflowY: "auto",
+    backgroundColor: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    padding: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  emptyTranscript: {
+    margin: "auto",
+    textAlign: "center",
+    color: "#94a3b8",
+    fontSize: 14,
+    maxWidth: 320,
+    lineHeight: 1.5,
+  },
+  messageRow: {
+    display: "flex",
+    width: "100%",
+  },
+  messageBubble: {
+    maxWidth: "82%",
+    padding: "10px 14px",
+    borderRadius: 14,
+    fontSize: 14,
+    lineHeight: 1.5,
+  },
+  aiBubble: {
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    border: "1px solid #e2e8f0",
+    borderBottomLeftRadius: 4,
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.03)",
+  },
+  studentBubble: {
+    backgroundColor: "#2563eb",
+    color: "#ffffff",
+    borderBottomRightRadius: 4,
+  },
+  senderTag: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    marginBottom: 3,
+  },
+  messageBody: {
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  typedForm: {
+    borderTop: "1px solid #e2e8f0",
+    paddingTop: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  typedHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  micPausedBadge: {
+    fontSize: 12,
+    backgroundColor: "#fefce8",
+    color: "#854d0e",
+    border: "1px solid #fef08a",
+    padding: "3px 10px",
+    borderRadius: 999,
+  },
+  linkBtn: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: "#1d4ed8",
+    fontWeight: 600,
+    fontSize: 12,
+    textDecoration: "underline",
+    cursor: "pointer",
+  },
+  textarea: {
+    width: "100%",
+    boxSizing: "border-box",
+    fontSize: 14,
+    fontFamily: "inherit",
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #cbd5e1",
+    resize: "vertical",
+    outline: "none",
+  },
+  typedFooter: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  sendBtn: {
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "8px 16px",
     borderRadius: 8,
-    padding: "8px 12px",
-    margin: "0 0 12px",
+    border: "none",
+    backgroundColor: "#0f172a",
+    color: "#ffffff",
+    cursor: "pointer",
+  },
+  inlineError: {
+    fontSize: 13,
+    color: "#dc2626",
   },
 } as const;
