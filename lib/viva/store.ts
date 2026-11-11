@@ -18,6 +18,8 @@ import { redisCommand, redisConfig } from "./redis";
 
 export type VivaSession = {
   vivaId: string;
+  /** The submission whose saved questions this viva was locked to; absent for the sample plan. */
+  submissionId?: string;
   plan: VivaPlan;
   mode: VivaMode;
   issuedAt: string;

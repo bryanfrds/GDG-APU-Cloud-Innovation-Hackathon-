@@ -8,11 +8,13 @@ import {
   parseMode,
   parsePlan,
   SAMPLE_PLAN,
+  type VivaPlan,
   VIVA_TOOLS,
 } from "@/lib/viva/plan";
 import { createRateLimiter } from "@/lib/viva/rate-limit";
 import { clientAddress, passcodeOk, readJsonBody } from "@/lib/viva/request-guard";
 import { newVivaId, saveSession } from "@/lib/viva/store";
+import { isSubmissionId, loadSubmissionPlan, submissionsApiUrl } from "@/lib/viva/submission-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -32,14 +34,30 @@ export async function POST(req: Request) {
     return Response.json({ error: "Wrong or missing demo passcode." }, { status: 401 });
   }
 
-  // The body says what this viva is about: { plan?, mode? }. No plan means the sample.
-  // TODO(Person 1): take a submission id instead and load its questions from Firestore,
-  // so a student can't send their own questions.
+  // The body says what this viva is about: { submissionId?, plan?, mode? }.
+  // - submissionId: the questions saved for that submission are loaded here on the server.
+  // - plan: a client-written plan. Only for demos: refused once a submissions service is configured,
+  //   so a student can't send their own questions (VIVA_ALLOW_CLIENT_PLAN=1 re-enables it for testing).
+  // - neither: the sample plan.
   const read = await readJsonBody(req, MAX_BODY_BYTES);
   if ("error" in read) return Response.json({ error: read.error }, { status: read.status });
   const body = read.body;
-  const parsed = body.plan === undefined ? { plan: SAMPLE_PLAN } : parsePlan(body.plan);
-  if ("error" in parsed) return Response.json({ error: parsed.error }, { status: 400 });
+
+  let parsed: { plan: VivaPlan } | { error: string; status: number };
+  let submissionId: string | undefined;
+  if (body.submissionId !== undefined) {
+    if (!isSubmissionId(body.submissionId)) return Response.json({ error: "Unknown submission." }, { status: 404 });
+    submissionId = body.submissionId;
+    parsed = await loadSubmissionPlan(submissionId);
+  } else if (body.plan === undefined) {
+    parsed = { plan: SAMPLE_PLAN };
+  } else if (submissionsApiUrl() && process.env.VIVA_ALLOW_CLIENT_PLAN !== "1") {
+    return Response.json({ error: "Start the viva from a submission." }, { status: 400 });
+  } else {
+    const checked = parsePlan(body.plan);
+    parsed = "error" in checked ? { error: checked.error, status: 400 } : checked;
+  }
+  if ("error" in parsed) return Response.json({ error: parsed.error }, { status: parsed.status });
   const mode = parseMode(body.mode);
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -85,14 +103,14 @@ export async function POST(req: Request) {
   const vivaId = newVivaId();
   let canSave = true;
   try {
-    await saveSession({ vivaId, plan: parsed.plan, mode, issuedAt: new Date(now).toISOString() });
+    await saveSession({ vivaId, submissionId, plan: parsed.plan, mode, issuedAt: new Date(now).toISOString() });
   } catch (err) {
     console.error("Failed to save viva session; this viva can't be saved", err);
     canSave = false;
   }
 
   return Response.json(
-    { token: token.name, model: VIVA_MODEL, vivaId, canSave, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
+    { token: token.name, model: VIVA_MODEL, vivaId, submissionId, canSave, mode, seconds: MODE_SECONDS[mode], plan: parsed.plan },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
