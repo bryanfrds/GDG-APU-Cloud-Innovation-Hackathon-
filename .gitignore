@@ -4,7 +4,6 @@
 *service-account*.json
 *-key.json
 secrets/
-.env.*
 
 
 # Dependencies and builds

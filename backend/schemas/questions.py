@@ -1,41 +1,30 @@
-
 from typing import Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-
-Difficulty = Literal["easy", "medium", "hard"]
+Difficulty = Literal['easy', 'medium', 'hard']
 
 
 class VivaQuestion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    question: str = Field(min_length=10)
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(min_length=2, max_length=40)
+    question: str = Field(min_length=10, max_length=400)
     difficulty: Difficulty
-    topic: str
+    topic: str = Field(min_length=1, max_length=300)
     source_file: str
     source_lines: list[int] = Field(default_factory=list)
     source_pages: list[int] = Field(default_factory=list)
-
-    # Private grading data
     expected_points: list[str] = Field(min_length=1)
     follow_up_hint: str
 
 
 class QuestionSet(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+    model_config = ConfigDict(extra='forbid')
     submission_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal['ready'] = 'ready'
     assignment_summary: str = Field(min_length=10)
-    questions: list[VivaQuestion] = Field(
-        min_length=5,
-        max_length=5
-    )
+    questions: list[VivaQuestion] = Field(min_length=5, max_length=5)
 
 
-# Public schema for the student-facing API.
-# Expected points and grading hints remain private.
 class PublicVivaQuestion(BaseModel):
     id: str
     question: str
@@ -45,5 +34,5 @@ class PublicVivaQuestion(BaseModel):
 
 class PublicQuestionSet(BaseModel):
     submission_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal['ready'] = 'ready'
     questions: list[PublicVivaQuestion]
