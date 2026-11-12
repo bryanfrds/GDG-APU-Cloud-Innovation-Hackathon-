@@ -1,7 +1,7 @@
 # Person 1 — Remaining Work
 
 **Branch:** `feature/gemini-viva-integration` (PR #18)
-**Updated:** 11 November 2026
+**Updated:** 12 November 2026
 **Source:** `PROVE_IT_PERSON_1_COMPLETE_TASK_CHECKLIST.md`
 
 ## Done so far
@@ -9,6 +9,14 @@
 - Vercel build fixed: `vercel.json` pins `"framework": "nextjs"` (the project preset was "services" with no services declared). `.vercelignore` keeps `backend/` out of the Next build.
 - `backend/requirements.txt` re-encoded from UTF-16 to UTF-8; fresh-venv install and the 11 pytest tests pass.
 - `POST /api/viva/token` accepts `submissionId`, loads the saved plan server-side from the Python service (`PROVE_IT_API_URL`), validates it with `parsePlan()`, stores `submissionId` in the viva session, and refuses client-written plans once the service is configured. Error mapping (404/409/422/429/502) and tests are in place (`lib/viva/submission-plan.ts`, `app/api/viva/token/submission.test.ts`).
+
+- Upload page `/submit` and Next proxy routes (`/api/submissions`, `/api/submissions/[id]/generate`): passcode stays server-side, rate limited, double clicks blocked, retry without re-uploading.
+- `/viva-test?submission=<id>` sends the `submissionId`; the sample plan is only the fallback with no id.
+- PDF fix: Gemini's page citations are now checked against the `[Page N]` markers instead of failing every PDF.
+- Fixed the `/dev/null` test and removed the Windows-only failure (the stray `C:\dev` folder still needs deleting by hand).
+- Real runs with Gemini: a tiny `.py`, a `.cpp`, a text PDF and a 45-line Python file with a prompt-injection comment all produced specific questions and valid plans. Injection text had no effect.
+- Bad-input checks done: empty, 11 MB, over 30,000 characters, invalid UTF-8, fake PDF, unsupported type, traversal and Unicode filenames, long/missing title, malformed multipart. No orphaned files or rows.
+- Three parallel `generate` calls returned 200 and left one saved set (but each called Gemini).
 
 ## Blocked on a team decision (do these first)
 
@@ -21,7 +29,7 @@
 
 - [ ] Verify the viva-plan endpoint against real Gemini-generated records, not only mocks.
 - [ ] Set `PROVE_IT_API_URL` and a matching `DEMO_PASSCODE` on the deployed Next app and the Python service.
-- [ ] Update the viva page (`app/viva-test/page.tsx`) to send a `submissionId`. It still sends `SAMPLE_PLAN`. Coordinate with Bryan.
+- [x] Update the viva page (`app/viva-test/page.tsx`) to send a `submissionId`. It still sends `SAMPLE_PLAN`. Coordinate with Bryan. **Done** (`?submission=`); still coordinate with Bryan.
 - [ ] Confirm the saved viva record references the locked plan and `submissionId`; coordinate any schema change with Persons 2 and 3.
 - [ ] End-to-end test with one real submission: upload, generate, fetch plan, start viva, confirm it asks that student's questions.
 - [ ] Contract test: run real generated plans through the actual `parsePlan()` or a shared fixture.
@@ -29,9 +37,9 @@
 ## Upload UI (2C) — with Person 4
 
 - [ ] Agree how Next calls upload and generate (server proxy route handlers preferred, so the passcode stays server-side).
-- [ ] Upload form (title + PDF/code file) and Next proxy routes for upload, generate and status.
-- [ ] Loading / processing / ready / failed states with clear 4xx/5xx messages.
-- [ ] Prevent duplicate generation on repeated clicks.
+- [x] Upload form (title + PDF/code file) and Next proxy routes for upload, generate and status. **Done** (`/submit`). Status route not needed: generate is synchronous.
+- [x] Loading / processing / ready / failed states with clear 4xx/5xx messages. **Done.** Browser test on mobile still to do.
+- [x] Prevent duplicate generation on repeated clicks. **Done in the UI**; the service is not locked yet.
 - [ ] Browser test on desktop and mobile with real files.
 
 ## Private storage and data model
@@ -45,19 +53,19 @@
 
 ## Upload and extraction hardening
 
-- [ ] Test valid `.py`, `.java`, `.cpp`, `.txt` and selectable-text `.pdf`.
-- [ ] Test bad input: unsupported extension, empty, over 10 MiB, over 30,000 characters, invalid UTF-8, corrupted / encrypted / scanned / over-50-page PDF.
-- [ ] Test path traversal, long or Unicode filenames, invalid titles, malformed multipart.
-- [ ] Confirm failed uploads leave no stored file or orphaned database row.
+- [ ] Test valid `.py`, `.java`, `.cpp`, `.txt` and selectable-text `.pdf`. (`.py`, `.cpp`, `.pdf` done; `.java`, `.txt` left.)
+- [ ] Test bad input (corrupted/encrypted/scanned/over-50-page PDFs left): unsupported extension, empty, over 10 MiB, over 30,000 characters, invalid UTF-8, corrupted / encrypted / scanned / over-50-page PDF.
+- [x] Test path traversal, long or Unicode filenames, invalid titles, malformed multipart.
+- [x] Confirm failed uploads leave no stored file or orphaned database row.
 - [ ] Test concurrent submissions and idempotent generation.
 - [ ] Confirm timeouts and body limits at the deployment proxy.
 - [ ] Confirm extracted content is never logged or shown in errors.
 
 ## Gemini generation hardening
 
-- [ ] Real Gemini run on at least two different assignments; confirm questions are specific to each.
+- [x] Real Gemini run on at least two different assignments; confirm questions are specific to each. (Done on four. One hard question had a wrong premise, so questions need lecturer review.)
 - [ ] Check line references stay within source bounds and PDF citations are not invented.
-- [ ] Prompt injection: escape `<`/`>` in assignment text, use a safe filename in the prompt.
+- [ ] Prompt injection (one real test passed; escaping is in code): escape `<`/`>` in assignment text, use a safe filename in the prompt.
 - [ ] Fake-response tests: invalid JSON, empty, wrong IDs, missing fields, fake source lines, overlong text, line breaks, hidden characters.
 - [ ] Error handling for 429, timeouts, 500–504, missing key or model. Lower the 90 s timeout (about 30 s) and bound fallback retries.
 - [ ] Measure real latency and quota behaviour.
@@ -77,7 +85,7 @@
 - [ ] Integration tests for the cross-service route, including failure cases.
 - [ ] Python tests in a clean venv, with the result saved in PR notes.
 - [ ] CI for Python dependencies and tests (if the team agrees).
-- [ ] Fix `app/api/viva/token/route.test.ts` "still starts the viva when its session can't be saved": it uses `/dev/null/...`, which is writable on Windows and creates `C:\dev\null`. Use a path that is unwritable on every OS.
+- [x] Fix `app/api/viva/token/route.test.ts` "still starts the viva when its session can't be saved": it uses `/dev/null/...`, which is writable on Windows and creates `C:\dev\null`. Use a path that is unwritable on every OS. **Done.**
 - [ ] Delete the stray `C:\dev` folder that test left behind.
 - [ ] Update `docs/backend-api.md` (base URL, protected request samples, error codes, config, caveats).
 - [ ] Update the PR #18 description (routes, extraction, generation/persistence, requirements, security, tests, limitations).

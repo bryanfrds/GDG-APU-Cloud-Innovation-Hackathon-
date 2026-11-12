@@ -1,8 +1,14 @@
 # Prove It — Python submission service (local/demo)
 
-This service is separate from Next.js. The Next viva **does not automatically**
-fetch these questions until Bryan wires `submissionId` handling into
-`app/api/viva/token/route.ts` (or the team consolidates the services).
+This service is separate from Next.js. The Next app talks to it server to server:
+
+- `POST /api/viva/token` takes a `submissionId` and loads the saved viva plan from here.
+- `POST /api/submissions` and `POST /api/submissions/[id]/generate` (Next) proxy the upload and
+  question generation, so the service URL and the real passcode never reach the browser.
+- The student pages are `/submit` (upload, then generate) and `/viva-test?submission=<id>`.
+
+Set `PROVE_IT_API_URL` (this service's base URL) and the **same** `DEMO_PASSCODE` on both the Next app
+and this service.
 
 ## Local setup
 
@@ -18,6 +24,11 @@ python -m pytest -q tests
 Use `x-demo-code: <DEMO_PASSCODE>` on every submission and question API call.
 Missing `DEMO_PASSCODE` fails closed with HTTP 503, including locally.
 
+Errors use `{"detail": "..."}`: 400 bad title/empty file/malformed form, 401 wrong passcode, 404 unknown
+submission or questions not generated, 413 over 10 MiB, 415 unsupported type, 422 unreadable file,
+over the character limit, or invalid Gemini output, 429 too many requests or Gemini quota, 502 other
+generation failure, 503 `DEMO_PASSCODE` not configured or Gemini unavailable.
+
 | Method | Route | Result |
 | --- | --- | --- |
 | POST | `/api/submissions` | Multipart `title` (1–120 plain characters), `file` (PDF/py/java/cpp/txt), max 10 MiB, max 30,000 extracted characters |
@@ -26,6 +37,9 @@ Missing `DEMO_PASSCODE` fails closed with HTTP 503, including locally.
 | POST | `/api/submissions/{submission_id}/generate` | Generates five private questions with Gemini, returns public fields |
 | GET | `/api/submissions/{submission_id}/questions` | Five student-safe questions; no grading rubric |
 | GET | `/api/submissions/{submission_id}/viva-plan` | `{ assignmentTitle, questions: [{ id, text, focus }] }`, four questions for Next's `parsePlan()` |
+
+For PDFs, Gemini may cite `source_pages`; each must match a `[Page N]` marker the extractor saw.
+PDF line numbers are always rejected. Code files must cite real line numbers.
 
 The viva-plan endpoint selects q1/q2/q3/q5 (two easy, medium, hard).
 The `focus` field contains only the public topic, not grading rubric points.
@@ -53,3 +67,12 @@ Every field is validated for single-line/hidden characters and size limits.
   deploy the Python service automatically.
 - Do **not** expose `/content` to students in production; implement per-user
   ownership checks rather than shared passcode alone.
+
+## Known limitations
+
+- Generation is not locked: parallel `generate` calls for one submission each call Gemini
+  (the first saved set is reused afterwards). Add a lock or `processing` check before a public launch.
+- Gemini latency varies (about 10-25 s, occasionally over the 30 s per-model limit, which returns 503).
+  The upload page lets the student retry without uploading again.
+- Questions are checked for shape and real line/page references, not for factual correctness.
+  A hard question can contain a wrong premise, so a lecturer should review before grading uses them.
