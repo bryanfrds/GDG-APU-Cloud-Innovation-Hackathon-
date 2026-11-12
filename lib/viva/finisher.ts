@@ -7,7 +7,15 @@ import type { SaveResult } from "./save";
 import type { Transcript } from "./transcript";
 
 /** What the server told us about a viva when it issued the pass. */
-export type LiveViva = { vivaId: string; canSave: boolean; mode: VivaMode; plan: VivaPlan; startedAt: number };
+export type LiveViva = {
+  vivaId: string;
+  canSave: boolean;
+  mode: VivaMode;
+  plan: VivaPlan;
+  startedAt: number;
+  /** The submission the viva is about, as the server locked it; null for the sample. */
+  submissionId?: string | null;
+};
 
 export type SaveState = "idle" | "saving" | "saved" | "failed" | "off";
 
@@ -74,6 +82,7 @@ export function createVivaFinisher(opts: {
       viva = null;
       const record = buildRecord({
         vivaId: current.vivaId,
+        submissionId: current.submissionId ?? null,
         mode: current.mode,
         plan: current.plan,
         startedAt: current.startedAt,

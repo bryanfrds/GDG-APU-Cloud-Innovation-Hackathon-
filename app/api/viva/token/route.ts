@@ -14,6 +14,7 @@ import {
 import { createRateLimiter } from "@/lib/viva/rate-limit";
 import { clientAddress, passcodeOk, readJsonBody } from "@/lib/viva/request-guard";
 import { newVivaId, saveSession } from "@/lib/viva/store";
+import { getSubmission } from "@/lib/submissions/store";
 import { isSubmissionId, loadSubmissionPlan, submissionsApiUrl } from "@/lib/viva/submission-plan";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +49,21 @@ export async function POST(req: Request) {
   if (body.submissionId !== undefined) {
     if (!isSubmissionId(body.submissionId)) return Response.json({ error: "Unknown submission." }, { status: 404 });
     submissionId = body.submissionId;
-    parsed = await loadSubmissionPlan(submissionId);
+    if (submissionsApiUrl()) {
+      parsed = await loadSubmissionPlan(submissionId);
+    } else {
+      // No separate submissions service: uploads are saved by this app (/api/submissions).
+      const saved = await getSubmission(submissionId).catch((err) => {
+        console.error("Failed to read submission", err);
+        return undefined;
+      });
+      parsed =
+        saved === undefined
+          ? { error: "Couldn't load that submission. Try again.", status: 502 }
+          : saved
+            ? { plan: saved.plan }
+            : { error: "Unknown submission.", status: 404 };
+    }
   } else if (body.plan === undefined) {
     parsed = { plan: SAMPLE_PLAN };
   } else if (submissionsApiUrl() && process.env.VIVA_ALLOW_CLIENT_PLAN !== "1") {
