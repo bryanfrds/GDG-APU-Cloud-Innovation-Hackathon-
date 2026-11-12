@@ -1,0 +1,28 @@
+{
+  "name": "prove-it",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "viva:models": "node scripts/list-live-models.mjs",
+    "viva:hello": "node scripts/live-hello.mjs",
+    "test": "vitest run && node --test \"scripts/*.test.mjs\""
+  },
+  "dependencies": {
+    "@google/genai": "^2.32.0",
+    "next": "^16.4.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

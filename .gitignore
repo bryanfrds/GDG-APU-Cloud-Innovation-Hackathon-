@@ -1,0 +1,45 @@
+# Secrets: never commit
+.env*
+!.env.example
+*service-account*.json
+*-key.json
+secrets/
+
+
+# Dependencies and builds
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+# OS and editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local test output
+tmp/
+
+# Next.js
+.next/
+*.tsbuildinfo
+next-env.d.ts
+# Written by `next dev` for AI coding tools; kept out of the repo on purpose
+AGENTS.md
+
+# Local viva data (sessions and saved records)
+.data/
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Uploaded assignments
+backend/uploads/
+
+# Local database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
