@@ -12,6 +12,9 @@ export default function Home() {
         <li>
           <a href="/viva-test">Try a sample viva</a>
         </li>
+        <li>
+          <a href="/lecturer">Lecturer: see reports</a>
+        </li>
       </ul>
     </main>
   );
