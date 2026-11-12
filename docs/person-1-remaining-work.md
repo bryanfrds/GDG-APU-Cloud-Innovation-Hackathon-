@@ -10,8 +10,7 @@
 - `backend/requirements.txt` re-encoded from UTF-16 to UTF-8; fresh-venv install and the 11 pytest tests pass.
 - `POST /api/viva/token` accepts `submissionId`, loads the saved plan server-side from the Python service (`PROVE_IT_API_URL`), validates it with `parsePlan()`, stores `submissionId` in the viva session, and refuses client-written plans once the service is configured. Error mapping (404/409/422/429/502) and tests are in place (`lib/viva/submission-plan.ts`, `app/api/viva/token/submission.test.ts`).
 
-- Upload page `/submit` and Next proxy routes (`/api/submissions`, `/api/submissions/[id]/generate`): passcode stays server-side, rate limited, double clicks blocked, retry without re-uploading.
-- `/viva-test?submission=<id>` sends the `submissionId`; the sample plan is only the fallback with no id.
+- The team merged a Next-only upload flow (PR #25, saved in Upstash). The Python service and its Firestore store below are an optional alternative, not wired into `/submit`.
 - PDF fix: Gemini's page citations are now checked against the `[Page N]` markers instead of failing every PDF.
 - Fixed the `/dev/null` test and removed the Windows-only failure (the stray `C:\dev` folder still needs deleting by hand).
 - Real runs with Gemini: a tiny `.py`, a `.cpp`, a text PDF and a 45-line Python file with a prompt-injection comment all produced specific questions and valid plans. Injection text had no effect.
@@ -29,7 +28,7 @@
 
 - [ ] Verify the viva-plan endpoint against real Gemini-generated records, not only mocks.
 - [ ] Set `PROVE_IT_API_URL` and a matching `DEMO_PASSCODE` on the deployed Next app and the Python service.
-- [x] Update the viva page (`app/viva-test/page.tsx`) to send a `submissionId`. It still sends `SAMPLE_PLAN`. Coordinate with Bryan. **Done** (`?submission=`); still coordinate with Bryan.
+- [x] Update the viva page (`app/viva-test/page.tsx`) to send a `submissionId`. It still sends `SAMPLE_PLAN`. Coordinate with Bryan. **Done on dev by PR #25** (the Next-only flow).
 - [ ] Confirm the saved viva record references the locked plan and `submissionId`; coordinate any schema change with Persons 2 and 3.
 - [ ] End-to-end test with one real submission: upload, generate, fetch plan, start viva, confirm it asks that student's questions.
 - [ ] Contract test: run real generated plans through the actual `parsePlan()` or a shared fixture.
@@ -37,7 +36,7 @@
 ## Upload UI (2C) — with Person 4
 
 - [ ] Agree how Next calls upload and generate (server proxy route handlers preferred, so the passcode stays server-side).
-- [x] Upload form (title + PDF/code file) and Next proxy routes for upload, generate and status. **Done** (`/submit`). Status route not needed: generate is synchronous.
+- [x] Upload form (title + PDF/code file). **Done on dev by PR #25** (`/submit`, calls Gemini in Next, no Python proxy).
 - [x] Loading / processing / ready / failed states with clear 4xx/5xx messages. **Done.** Browser test on mobile still to do.
 - [x] Prevent duplicate generation on repeated clicks. **Done in the UI**; the service is not locked yet.
 - [ ] Browser test on desktop and mobile with real files.

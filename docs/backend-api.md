@@ -1,14 +1,12 @@
 # Prove It — Python submission service (local/demo)
 
-This service is separate from Next.js. The Next app talks to it server to server:
-
-- `POST /api/viva/token` takes a `submissionId` and loads the saved viva plan from here.
-- `POST /api/submissions` and `POST /api/submissions/[id]/generate` (Next) proxy the upload and
-  question generation, so the service URL and the real passcode never reach the browser.
-- The student pages are `/submit` (upload, then generate) and `/viva-test?submission=<id>`.
+This is the optional **Python submissions service**. The app also has a Next-only upload flow
+(`POST /api/submissions`, saved in Upstash Redis; see `lib/submissions/`) that needs no second service.
+Use one or the other: when `PROVE_IT_API_URL` is set, `POST /api/viva/token` loads a submission's plan
+from this service instead of from Upstash, and refuses client-written plans.
 
 Set `PROVE_IT_API_URL` (this service's base URL) and the **same** `DEMO_PASSCODE` on both the Next app
-and this service.
+and this service. Call this service's routes server to server only, so the passcode stays off the browser.
 
 ## Local setup
 
