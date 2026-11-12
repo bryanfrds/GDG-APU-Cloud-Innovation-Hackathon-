@@ -167,7 +167,7 @@ def test_cloud_mode_without_bucket_settings_fails_at_startup(tmp_path, monkeypat
             pass
 
 
-def test_firestore_only_mode_keeps_files_on_local_disk(tmp_path, monkeypatch):
+def test_firestore_only_mode_keeps_the_text_in_the_record_and_no_file(tmp_path, monkeypatch):
     fake_db = FakeFirestore()
     monkeypatch.setenv('PROVE_IT_DATA_DIR', str(tmp_path))
     monkeypatch.setenv('DEMO_PASSCODE', 'only-for-tests')
@@ -179,15 +179,39 @@ def test_firestore_only_mode_keeps_files_on_local_disk(tmp_path, monkeypatch):
     from security import UPLOAD_LIMITER, GENERATE_LIMITER
     UPLOAD_LIMITER.clear()
     GENERATE_LIMITER.clear()
+    import routes.questions as routes
+    monkeypatch.setattr(routes, 'generate_gemini_questions', lambda **kw: question_set(kw['submission_id']))
     from main import app
     with TestClient(app) as client:
-        res = upload(client)
+        res = upload(client, body=b'print("secret-marker")\n')
         assert res.status_code == 201
-        sid, stored = res.json()['submission_id'], res.json()['stored_filename']
-        assert (tmp_path / 'uploads' / stored).is_file()
-        assert fake_db.collections['submissions'][sid]['stored_filename'] == stored
+        sid = res.json()['submission_id']
+        record = fake_db.collections['submissions'][sid]
+        assert 'secret-marker' in record['extracted']['content']
         assert not (tmp_path / 'prove_it.db').exists()
-        assert client.get(f'/api/submissions/{sid}/content', headers=AUTH).status_code == 200
+        # No private copy is left on disk, so a restarted server loses nothing it needs.
+        assert not (tmp_path / 'uploads').exists() or not list((tmp_path / 'uploads').iterdir())
+        # The text is readable only through /content, never the plain status endpoint.
+        assert 'secret-marker' not in client.get(f'/api/submissions/{sid}', headers=AUTH).text
+        assert 'secret-marker' in client.get(f'/api/submissions/{sid}/content', headers=AUTH).text
+        assert client.post(f'/api/submissions/{sid}/generate', headers=AUTH).status_code == 200
+        assert len(client.get(f'/api/submissions/{sid}/viva-plan', headers=AUTH).json()['questions']) == 4
+
+
+def test_failed_firestore_save_leaves_no_local_file(tmp_path, monkeypatch):
+    monkeypatch.setenv('PROVE_IT_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('DEMO_PASSCODE', 'only-for-tests')
+    monkeypatch.setenv('PROVE_IT_STORE', 'firestore')
+    monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
+    monkeypatch.setattr(cloud, 'firestore_db', lambda: FakeFirestore())
+    from security import UPLOAD_LIMITER
+    UPLOAD_LIMITER.clear()
+    import main
+    monkeypatch.setattr(main, 'save_submission', lambda **kw: (_ for _ in ()).throw(RuntimeError('down')))
+    with TestClient(main.app) as client:
+        with pytest.raises(RuntimeError):
+            upload(client)
+    assert not (tmp_path / 'uploads').exists() or not list((tmp_path / 'uploads').iterdir())
 
 
 def test_firestore_mode_without_a_project_fails_at_startup(tmp_path, monkeypatch):

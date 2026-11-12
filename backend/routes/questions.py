@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import cloud
 from database import get_submission, set_submission_status
-from file_processor import ProcessingError, process_assignment
+from file_processor import ProcessingError, load_assignment
 from question_database import get_question_set, save_question_set
 from schemas.questions import PublicQuestionSet
 from security import one_line, protect_generate, protect_read
@@ -61,8 +61,7 @@ def generate_questions(submission_id: str):
     if not SAFE_STORED.fullmatch(stored_filename):
         raise HTTPException(status_code=500, detail='Invalid stored filename')
     try:
-        with cloud.stored_file(stored_filename) as file_path:
-            extracted = process_assignment(file_path)
+        extracted = load_assignment(submission)
         set_submission_status(submission_id, 'processing')
         generated = generate_gemini_questions(
             submission_id=submission_id,

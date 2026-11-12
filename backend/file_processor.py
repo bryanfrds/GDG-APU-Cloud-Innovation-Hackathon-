@@ -1,6 +1,7 @@
 """Bounded text extraction for supported submission formats."""
 from pathlib import Path
 from pypdf import PdfReader
+import cloud
 from config import AI_CHAR_LIMIT
 
 SUPPORTED_CODE_EXTENSIONS = {'.py', '.java', '.cpp', '.txt'}
@@ -57,3 +58,14 @@ def process_assignment(file_path: Path):
         raise ProcessingError('Extracted assignment exceeds 30,000 characters')
     return {'file_type': extension, 'character_count': len(content),
             'line_count': len(content.splitlines()), 'content': content}
+
+
+def load_assignment(submission: dict):
+    """Extracted text for a saved submission: from its record if kept there, else from the stored file.
+
+    Raises FileNotFoundError when the stored file is gone, ProcessingError when it can't be read.
+    """
+    if submission.get('extracted'):
+        return submission['extracted']
+    with cloud.stored_file(submission['stored_filename']) as path:
+        return process_assignment(path)

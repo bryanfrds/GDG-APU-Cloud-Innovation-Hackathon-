@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 import cloud
 from config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES
 from database import get_submission, init_db, save_submission
-from file_processor import ProcessingError, process_assignment
+from file_processor import ProcessingError, load_assignment, process_assignment
 from security import one_line, protect_read, protect_upload
 from routes.questions import router as questions_router
 
@@ -61,7 +61,7 @@ async def create_submission(title: str = Form(...), file: UploadFile = File(...)
             raise HTTPException(status_code=400, detail='File cannot be empty')
         # Validate extractability and AI character limit now, not after upload.
         try:
-            process_assignment(destination_path)
+            extracted = process_assignment(destination_path)
         except ProcessingError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         cloud.commit_file(destination_path, stored_filename)
@@ -70,7 +70,10 @@ async def create_submission(title: str = Form(...), file: UploadFile = File(...)
             submission_id=submission_id, title=clean_title,
             original_filename=original_filename, stored_filename=stored_filename,
             file_size_bytes=total_bytes,
+            extracted=extracted if cloud.keeps_text_in_record() else None,
         )
+        if cloud.keeps_text_in_record():
+            cloud.discard_incoming(destination_path)  # the record has the text; keep no private file on disk
     except Exception:
         cloud.discard_incoming(destination_path)
         if committed:
@@ -94,7 +97,8 @@ def read_submission(submission_id: str):
     submission = get_submission(submission_id)
     if submission is None:
         raise HTTPException(status_code=404, detail='Submission not found')
-    return submission
+    # The extracted text is private; only /content (behind the same passcode) returns it.
+    return {key: value for key, value in submission.items() if key != 'extracted'}
 
 
 @app.get('/api/submissions/{submission_id}/content', dependencies=[Depends(protect_read)])
@@ -109,8 +113,7 @@ def read_submission_content(submission_id: str):
             Path(filename).suffix.lower() in ALLOWED_EXTENSIONS):
         raise HTTPException(status_code=500, detail='Invalid stored filename')
     try:
-        with cloud.stored_file(filename) as path:
-            result = process_assignment(path)
+        result = load_assignment(submission)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail='Uploaded file is missing') from error
     except ProcessingError as error:

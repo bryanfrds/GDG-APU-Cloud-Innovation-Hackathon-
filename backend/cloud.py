@@ -32,6 +32,11 @@ def use_cloud() -> bool:
     return _mode() == 'gcp'
 
 
+def keeps_text_in_record() -> bool:
+    """Firestore-only mode has no durable file store, so the extracted text lives in the record."""
+    return _mode() == 'firestore'
+
+
 def check_cloud_settings():
     """Fail at startup, not on the first student's upload."""
     mode = _mode()

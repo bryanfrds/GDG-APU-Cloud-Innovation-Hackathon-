@@ -39,7 +39,7 @@ Every field is validated for single-line/hidden characters and size limits.
 - Set `PROVE_IT_DATA_DIR` for local persistent storage (SQLite + uploads).
 - This rate limiter is in-memory **per process**; it is not distributed and
   must not be the only public-network protection at scale.
-- **Firestore-only mode:** `PROVE_IT_STORE=firestore` with `GOOGLE_CLOUD_PROJECT` keeps records in Firestore (free Spark plan, no billing card) and files on local disk, so records survive restarts but uploaded files do not.
+- **Firestore-only mode (verified):** `PROVE_IT_STORE=firestore` with `GOOGLE_CLOUD_PROJECT` needs no billing card (free Spark plan). The extracted text (at most 30,000 characters) is saved in the Firestore submission record under `extracted`, and the local upload is deleted, so nothing private stays on disk and a restarted or second instance loses nothing. The original file is not kept (generation and grading only need the text). `GET /api/submissions/{id}` never returns `extracted`; only `/content` does. Verified against a real project with a `.py` and a PDF: upload, generate, restart, read back and viva start all worked.
 - **Full cloud mode:** set `PROVE_IT_STORE=gcp` with `GCS_BUCKET` and `GOOGLE_CLOUD_PROJECT`. Files go to the
   bucket under `uploads/<id>.<ext>`; records go to Firestore collections `submissions` and
   `question_sets` (full question set, including the private rubric, as one JSON string). The service

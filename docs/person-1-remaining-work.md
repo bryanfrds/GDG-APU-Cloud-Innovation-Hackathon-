@@ -38,7 +38,7 @@
 
 - [ ] Write `docs/data-model.md` (Submission, File, ExtractedContent, QuestionSet, VivaPlan, VivaSession/Record references, grading access; ID types; status flow `uploaded` → `processing` → `ready` / `failed`; timestamps, owners, retention). Needs the storage decision first.
 - [ ] Durable private file storage: upload, fetch by internal key, cleanup on failure, retention policy, no guessable public URLs. **Code written** (`backend/cloud.py`, `PROVE_IT_STORE=gcp`, tested with fakes); still needs a real bucket and a real-credentials test, plus a retention policy.
-- [ ] Durable submission and question-set records that survive restarts and work across instances. **Code written** (Firestore); needs a real project to verify.
+- [ ] Durable submission and question-set records that survive restarts and work across instances. **Firestore done and verified** against a real project (`PROVE_IT_STORE=firestore`): records and questions survive a backend restart and the viva starts from them. The extracted text is stored in the record, so no file store is needed for generation or grading; original files are not kept.
 - [ ] Per-student ownership checks. The shared demo passcode is only a demo gate.
 - [ ] Authenticated internal grading contract for Person 3 (submission reference, evidence, private rubric). Never expose `expected_points` to students, bundles, logs or viva prompts.
 - [ ] Safe deletion and retention behaviour for student files and records.

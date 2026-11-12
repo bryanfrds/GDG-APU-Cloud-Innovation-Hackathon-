@@ -29,14 +29,17 @@ def init_db():
         )''')
 
 
-def save_submission(submission_id, title, original_filename, stored_filename, file_size_bytes):
+def save_submission(submission_id, title, original_filename, stored_filename, file_size_bytes,
+                    extracted=None):
     created_at = datetime.now(timezone.utc).isoformat()
     if cloud.use_firestore():
         # create() fails if the id exists, so a record is never silently overwritten.
         cloud.firestore_db().collection('submissions').document(submission_id).create({
             'submission_id': submission_id, 'title': title,
             'original_filename': original_filename, 'stored_filename': stored_filename,
-            'file_size_bytes': file_size_bytes, 'status': 'uploaded', 'created_at': created_at})
+            'file_size_bytes': file_size_bytes, 'status': 'uploaded', 'created_at': created_at,
+            # Extracted text (30,000 characters at most) so no durable file store is needed.
+            **({'extracted': extracted} if extracted else {})})
         return created_at
     with get_connection() as conn:
         conn.execute('''INSERT INTO submissions
