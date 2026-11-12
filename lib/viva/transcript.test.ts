@@ -53,6 +53,16 @@ describe("cleanTranscriptText", () => {
     expect(cleanTranscriptText("Okay. <No Speech> {pause} Next one?")).toBe("Okay. Next one?");
   });
 
+  it("removes the voice tag Gemini sometimes writes before a line", () => {
+    expect(cleanTranscriptText("<speaker:default_spoken_text>Okay, thanks.")).toBe("Okay, thanks.");
+  });
+
+  it("empties a line that is only an ellipsis, but keeps one inside a sentence", () => {
+    expect(cleanTranscriptText("…")).toBe("");
+    expect(cleanTranscriptText(" ... ")).toBe("");
+    expect(cleanTranscriptText("It returns true when… the book is there")).toBe("It returns true when… the book is there");
+  });
+
   it("keeps braces and the words 'no speech' in normal text", () => {
     expect(cleanTranscriptText("I wrote {a, b} and there was no speech recognition")).toBe("I wrote {a, b} and there was no speech recognition");
   });

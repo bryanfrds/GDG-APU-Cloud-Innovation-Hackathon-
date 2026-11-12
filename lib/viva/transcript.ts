@@ -35,6 +35,10 @@ const JUNK = [
   // Markers it writes while the student is silent.
   /<no speech>/giu,
   /\{pause\}/giu,
+  // A voice tag it sometimes writes before a line, like "<speaker:default_spoken_text>".
+  /<speaker:[a-z_]+>/giu,
+  // A line that is only an ellipsis: it writes one while thinking, and it says nothing.
+  /^\s*(?:\u2026|\.\.\.)\s*$/u,
 ];
 
 /** Removes Gemini's leaked tags from transcript text, and the extra spaces they leave. */
