@@ -17,15 +17,19 @@ export default function VivaReportPage({ params }: { params: Promise<{ vivaId: s
 
   async function load(code: string) {
     setError("");
-    const res = await fetch(`/api/reports/${encodeURIComponent(vivaId)}`, {
-      headers: code ? { "x-demo-code": code } : {},
-      cache: "no-store",
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) return setError(body.error ?? `Couldn't load this viva (${res.status}).`);
-    rememberPasscode(code);
-    setRecord(body.record);
-    setReport(body.report);
+    try {
+      const res = await fetch(`/api/reports/${encodeURIComponent(vivaId)}`, {
+        headers: code ? { "x-demo-code": code } : {},
+        cache: "no-store",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return setError(body.error ?? `Couldn't load this viva (${res.status}).`);
+      rememberPasscode(code);
+      setRecord(body.record);
+      setReport(body.report);
+    } catch {
+      setError("Couldn't reach the server. Check your internet and try again.");
+    }
   }
 
   async function score() {
@@ -39,7 +43,11 @@ export default function VivaReportPage({ params }: { params: Promise<{ vivaId: s
         signal: AbortSignal.timeout(70_000),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? `Scoring failed (${res.status}).`);
+      if (!res.ok) {
+        throw new Error(
+          body.error ?? (res.status === 504 ? "Scoring took too long. Try again." : `Scoring failed (${res.status}).`),
+        );
+      }
       setReport(body.report);
     } catch (err) {
       setError(err instanceof Error && err.name !== "TimeoutError" ? err.message : "Scoring took too long. Try again.");
@@ -64,6 +72,12 @@ export default function VivaReportPage({ params }: { params: Promise<{ vivaId: s
         <p style={{ margin: "0 0 12px", fontSize: 14 }}>
           <a href="/lecturer">← All vivas</a>
         </p>
+
+        {error && (
+          <p role="alert" style={ui.error}>
+            {error}
+          </p>
+        )}
 
         {!record ? (
           <form
@@ -116,11 +130,6 @@ export default function VivaReportPage({ params }: { params: Promise<{ vivaId: s
                 <br />
                 Worth a closer look; it isn&apos;t proof on its own.
               </div>
-            )}
-            {error && (
-              <p role="alert" style={ui.error}>
-                {error}
-              </p>
             )}
 
             <h2 style={{ fontSize: 18, margin: "24px 0 8px" }}>Questions</h2>

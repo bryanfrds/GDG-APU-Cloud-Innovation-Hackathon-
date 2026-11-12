@@ -79,6 +79,12 @@ describe("lecturer reports API", () => {
     expect(scoreViva).toHaveBeenCalledTimes(2);
   });
 
+  it("refuses everything on a production deploy with no passcode set", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { GET } = await import("./route");
+    expect((await GET(req("/api/reports"))).status).toBe(503);
+  });
+
   it("returns 404 for a viva that wasn't saved", async () => {
     const one = await import("./[vivaId]/route");
     expect((await one.GET(req("/x"), ctx("viva_000000000000000000000000"))).status).toBe(404);

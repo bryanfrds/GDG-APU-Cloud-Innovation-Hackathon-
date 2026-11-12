@@ -36,7 +36,7 @@
  * Environment variables required:
  *   GEMINI_API_KEY  — your Google AI Studio API key (required).
  *   GEMINI_MODEL    — the Gemini model to use (optional).
- *                     Defaults to "gemini-2.5-flash" if not set.
+ *                     Defaults to "gemini-3.5-flash" if not set.
  */
 
 import { GoogleGenAI, Type, ApiError, ThinkingLevel } from "@google/genai";
