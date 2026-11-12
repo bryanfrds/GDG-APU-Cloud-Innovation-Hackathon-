@@ -6,6 +6,7 @@ import { MODE_SECONDS, samePlan } from "@/lib/viva/plan";
 import { createRateLimiter } from "@/lib/viva/rate-limit";
 import { parseRecord } from "@/lib/viva/record";
 import { clientAddress, passcodeOk, readJsonBody } from "@/lib/viva/request-guard";
+import { kvListAdd } from "@/lib/kv";
 import { getRecord, getSession, saveRecordOnce, type StoredRecord } from "@/lib/viva/store";
 
 export const dynamic = "force-dynamic";
@@ -70,6 +71,9 @@ export async function POST(req: Request) {
     }
     return Response.json({ error: "This viva has already been saved." }, { status: 409 });
   }
+
+  // List it for the lecturer page. If that fails the record is still saved; it just won't be listed.
+  await kvListAdd("proveit:vivas", record.vivaId).catch((err) => console.error("Failed to list saved viva", err));
 
   return Response.json({ ok: true, vivaId: record.vivaId }, { status: 201 });
 }

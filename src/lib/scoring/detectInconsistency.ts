@@ -39,7 +39,7 @@
  *                     Defaults to "gemini-2.5-flash" if not set.
  */
 
-import { GoogleGenAI, Type, ApiError } from "@google/genai";
+import { GoogleGenAI, Type, ApiError, ThinkingLevel } from "@google/genai";
 import type { VivaTranscript, Submission, InconsistencyResult } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,8 @@ import type { VivaTranscript, Submission, InconsistencyResult } from "./types";
 // Same pattern as evaluateAnswer.ts — no model name hardcoded here.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash isn't available to our key any more; 3.5-flash is the one question writing uses too.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 
 // ---------------------------------------------------------------------------
 // GEMINI RESPONSE SHAPE
@@ -407,6 +408,8 @@ export async function detectInconsistency(
       contents: userMessage,
       config: {
         systemInstruction,
+        // Low thinking keeps each call to a few seconds, so a whole viva scores within the request limit.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseJsonSchema: {
           type: Type.OBJECT,

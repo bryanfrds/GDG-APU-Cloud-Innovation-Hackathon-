@@ -255,6 +255,7 @@ describe("POST /api/viva/records with Upstash Redis", () => {
     expect([...data.keys()].sort()).toEqual([
       `proveit:viva:${record.vivaId}:record`,
       `proveit:viva:${record.vivaId}:session`,
+      "proveit:vivas", // the lecturer list
     ]);
   });
 });

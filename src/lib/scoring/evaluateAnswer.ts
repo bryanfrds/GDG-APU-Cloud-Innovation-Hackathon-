@@ -29,7 +29,7 @@
  *                     "gemini-3-flash-preview".
  */
 
-import { GoogleGenAI, Type, ApiError } from "@google/genai";  //Task 4
+import { GoogleGenAI, Type, ApiError, ThinkingLevel } from "@google/genai";  //Task 4
 import { MIN_ANSWER_SCORE, MAX_ANSWER_SCORE } from "./scoringConfig";
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,8 @@ import { MIN_ANSWER_SCORE, MAX_ANSWER_SCORE } from "./scoringConfig";
 // following and JSON output — well-suited to this scoring task.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash isn't available to our key any more; 3.5-flash is the one question writing uses too.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 
 // ---------------------------------------------------------------------------
 // INPUT TYPE
@@ -319,6 +320,8 @@ export async function evaluateAnswer(
       contents: userMessage,
       config: {
         systemInstruction,
+        // Low thinking keeps each call to a few seconds, so a whole viva scores within the request limit.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseJsonSchema: {
           type: Type.OBJECT,
