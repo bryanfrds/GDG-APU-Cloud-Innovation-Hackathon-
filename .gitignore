@@ -5,6 +5,7 @@
 *-key.json
 secrets/
 
+
 # Dependencies and builds
 node_modules/
 .next/
@@ -29,3 +30,16 @@ AGENTS.md
 
 # Local viva data (sessions and saved records)
 .data/
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Uploaded assignments
+backend/uploads/
+
+# Local database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
