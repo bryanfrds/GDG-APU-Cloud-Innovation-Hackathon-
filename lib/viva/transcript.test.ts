@@ -53,6 +53,17 @@ describe("cleanTranscriptText", () => {
     expect(cleanTranscriptText("Okay. <No Speech> {pause} Next one?")).toBe("Okay. Next one?");
   });
 
+  it("removes the voice tag Gemini sometimes writes before a line", () => {
+    expect(cleanTranscriptText("<speaker:default_spoken_text>Okay, thanks.")).toBe("Okay, thanks.");
+    expect(cleanTranscriptText("<speaker:voice-1>Okay.")).toBe("Okay.");
+  });
+
+  it("removes a tool call Gemini writes out as text", () => {
+    const leaked = "Hello.<sink>\n<call:start_question{question_id:q1}/>\n</sink> I notice you used merge.";
+    expect(cleanTranscriptText(leaked)).toBe("Hello. I notice you used merge.");
+    expect(cleanTranscriptText("Okay.<call:end_viva{}/> Bye.")).toBe("Okay. Bye.");
+  });
+
   it("keeps braces and the words 'no speech' in normal text", () => {
     expect(cleanTranscriptText("I wrote {a, b} and there was no speech recognition")).toBe("I wrote {a, b} and there was no speech recognition");
   });
@@ -60,6 +71,45 @@ describe("cleanTranscriptText", () => {
   it("leaves normal text alone, including square brackets and angle brackets", () => {
     const text = "Use list[i], dict[key] and arr[idx] when i < n or x<y, and <already> is just a word here.";
     expect(cleanTranscriptText(text)).toBe(text);
+  });
+});
+
+describe("lines that are only an ellipsis", () => {
+  it("hides a spoken line that is only an ellipsis, but keeps one inside a sentence", () => {
+    for (const dots of ["…", " ... ", "..", "……"]) {
+      expect(texts(appendText(EMPTY_TRANSCRIPT, "ai", dots))).toEqual(["ai: "]);
+    }
+    expect(texts(appendText(EMPTY_TRANSCRIPT, "ai", "It returns true when… the book is there"))).toEqual([
+      "ai: It returns true when… the book is there",
+    ]);
+  });
+
+  it("leaves typed answers exactly as typed, ellipsis and code included", () => {
+    const meta = { questionId: "q1", atMs: 0 };
+    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "...", meta))).toEqual(["student: ..."]);
+    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "JSX <call:foo/> is self-closing", meta))).toEqual(["student: JSX <call:foo/> is self-closing"]);
+  });
+
+  it("removes a <sink> tool call that arrives split across chunks", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Hello.<sink>\n<call:start_q");
+    t = appendText(t, "ai", "uestion{question_id:q1}/>\n</si");
+    t = appendText(t, "ai", "nk> I notice you used merge.");
+    expect(texts(t)).toEqual(["ai: Hello. I notice you used merge."]);
+  });
+
+  it("doesn't let an unclosed <sink> swallow the speech after it", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "A<sink><call:x{}/> real words here <sink><call:y{}/></sink> end");
+    expect(texts(t)).toEqual(["ai: A real words here end"]);
+    t = appendText(EMPTY_TRANSCRIPT, "ai", "Hello.<sink>\n Then real speech.");
+    expect(texts(t)).toEqual(["ai: Hello.\n Then real speech."]);
+  });
+
+  it("removes a tag that arrives split across chunks, then shows the words", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "<speaker:def");
+    t = appendText(t, "ai", "ault_spoken_text>");
+    expect(texts(t)).toEqual(["ai: "]);
+    t = appendText(t, "ai", "Okay, thanks.");
+    expect(texts(t)).toEqual(["ai: Okay, thanks."]);
   });
 });
 

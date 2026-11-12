@@ -35,7 +35,19 @@ const JUNK = [
   // Markers it writes while the student is silent.
   /<no speech>/giu,
   /\{pause\}/giu,
+  // A voice tag it sometimes writes before a line, like "<speaker:default_spoken_text>".
+  /<speaker:[\w-]+>/giu,
+  // A tool call written out as text, like "<sink><call:start_question{question_id:q1}/></sink>".
+  // A pair never reaches back past another <sink>, so an unclosed one can't swallow speech.
+  /<sink>(?:(?!<sink>)[\s\S])*?<\/sink>/giu,
+  /\s*<call:[^<>]*\/>/giu,
+  // A stray half of a pair, if the turn ended before the other half arrived.
+  /<\/?sink>/giu,
 ];
+
+// The examiner writes a line that is only an ellipsis while it thinks; it says nothing.
+// Only for spoken lines: a student who types "..." means something by it.
+const ONLY_ELLIPSIS = /^\s*(?:\u2026+|\.{2,})\s*$/u;
 
 /** Removes Gemini's leaked tags from transcript text, and the extra spaces they leave. */
 export function cleanTranscriptText(text: string): string {
@@ -43,7 +55,12 @@ export function cleanTranscriptText(text: string): string {
 }
 
 function line(who: Speaker, raw: string, meta: LineMeta, typed = false): Line {
-  return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta, ...(typed ? { typed: true as const } : {}) };
+  // Typed answers come from the student, not Gemini, so none of Gemini's tags can be in them:
+  // cleaning them could only eat what the student wrote (code like "<call:foo/>", or "...").
+  if (typed) return { who, raw, text: raw.trimStart(), ...meta, typed: true as const };
+  const cleaned = cleanTranscriptText(raw).trimStart();
+  const text = ONLY_ELLIPSIS.test(cleaned) ? "" : cleaned;
+  return { who, raw, text, ...meta, ...(typed ? { typed: true as const } : {}) };
 }
 
 export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta): Transcript {
