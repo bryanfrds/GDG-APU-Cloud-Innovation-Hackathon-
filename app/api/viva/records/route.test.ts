@@ -73,6 +73,25 @@ describe("POST /api/viva/records", () => {
     expect((await changed.json()).error).toMatch(/already been saved/);
   });
 
+  it("only saves a record under the submission its viva was started for", async () => {
+    const { POST } = await loadRoute();
+    const vivaId = newVivaId();
+    await saveSession({ vivaId, submissionId: "sub_aaaaaaaaaaaaaaaaaaaa", plan: SAMPLE_PLAN, mode: "demo", issuedAt: new Date(ISSUED).toISOString() });
+    const base = {
+      vivaId, mode: "demo" as const, plan: SAMPLE_PLAN, startedAt: ISSUED + 5_000, endedAt: ISSUED + 35_000,
+      endReason: "completed" as const, transcript: EMPTY_TRANSCRIPT,
+    };
+    expect((await POST(post(buildRecord({ ...base, submissionId: "sub_bbbbbbbbbbbbbbbbbbbb" })))).status).toBe(409);
+    expect((await POST(post(buildRecord(base)))).status).toBe(409);
+    expect((await POST(post(buildRecord({ ...base, submissionId: "sub_aaaaaaaaaaaaaaaaaaaa" })))).status).toBe(201);
+  });
+
+  it("refuses a record that names a submission when its viva had none", async () => {
+    const { POST } = await loadRoute();
+    const record = await startedViva({ submissionId: "sub_cccccccccccccccccccc" });
+    expect((await POST(post(record))).status).toBe(409);
+  });
+
   it("refuses a viva this server never started", async () => {
     const { POST } = await loadRoute();
     const record = await startedViva();

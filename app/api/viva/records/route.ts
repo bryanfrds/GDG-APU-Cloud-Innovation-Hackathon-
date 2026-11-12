@@ -40,7 +40,12 @@ export async function POST(req: Request) {
   if (!session) return Response.json({ error: "This viva wasn't started on this server." }, { status: 404 });
 
   // Don't trust the browser's copy of what the viva was about.
-  if (record.mode !== session.mode || !samePlan(record.plan, session.plan)) {
+  // The submission too: a record can't be filed under a submission other than the one its viva was for.
+  if (
+    record.mode !== session.mode ||
+    !samePlan(record.plan, session.plan) ||
+    (record.submissionId ?? null) !== (session.submissionId ?? null)
+  ) {
     return Response.json({ error: "The record doesn't match the viva that was started." }, { status: 409 });
   }
 
