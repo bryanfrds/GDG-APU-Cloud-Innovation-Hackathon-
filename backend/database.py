@@ -14,8 +14,8 @@ def get_connection():
 
 
 def init_db():
-    if cloud.use_cloud():
-        cloud.check_cloud_settings()
+    cloud.check_cloud_settings()
+    if cloud.use_firestore():
         return
     with get_connection() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS submissions (
@@ -31,7 +31,7 @@ def init_db():
 
 def save_submission(submission_id, title, original_filename, stored_filename, file_size_bytes):
     created_at = datetime.now(timezone.utc).isoformat()
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         # create() fails if the id exists, so a record is never silently overwritten.
         cloud.firestore_db().collection('submissions').document(submission_id).create({
             'submission_id': submission_id, 'title': title,
@@ -48,7 +48,7 @@ def save_submission(submission_id, title, original_filename, stored_filename, fi
 
 
 def get_submission(submission_id):
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         snapshot = cloud.firestore_db().collection('submissions').document(submission_id).get()
         return snapshot.to_dict() if snapshot.exists else None
     with get_connection() as conn:
@@ -60,7 +60,7 @@ def get_submission(submission_id):
 def set_submission_status(submission_id: str, status: str):
     if status not in ('uploaded', 'processing', 'ready', 'failed'):
         raise ValueError('Unknown submission status')
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         cloud.firestore_db().collection('submissions').document(submission_id).update({'status': status})
         return
     with get_connection() as conn:

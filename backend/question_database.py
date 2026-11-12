@@ -8,7 +8,7 @@ from schemas.questions import QuestionSet
 
 
 def init_question_db():
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         return
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -25,7 +25,7 @@ def init_question_db():
 def save_question_set(question_set: QuestionSet, generator_type='gemini'):
     if generator_type not in ('gemini', 'mock'):
         raise ValueError('Unsupported generator type')
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         now = datetime.now(timezone.utc).isoformat()
         cloud.firestore_db().collection('question_sets').document(question_set.submission_id).set({
             'submission_id': question_set.submission_id, 'generator_type': generator_type,
@@ -44,7 +44,7 @@ def save_question_set(question_set: QuestionSet, generator_type='gemini'):
 
 
 def get_question_set(submission_id: str):
-    if cloud.use_cloud():
+    if cloud.use_firestore():
         snapshot = cloud.firestore_db().collection('question_sets').document(submission_id).get()
         if not snapshot.exists:
             return None

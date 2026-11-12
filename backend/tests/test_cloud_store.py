@@ -165,3 +165,45 @@ def test_cloud_mode_without_bucket_settings_fails_at_startup(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match='GCS_BUCKET'):
         with TestClient(app):
             pass
+
+
+def test_firestore_only_mode_keeps_files_on_local_disk(tmp_path, monkeypatch):
+    fake_db = FakeFirestore()
+    monkeypatch.setenv('PROVE_IT_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('DEMO_PASSCODE', 'only-for-tests')
+    monkeypatch.setenv('PROVE_IT_STORE', 'firestore')
+    monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
+    monkeypatch.delenv('GCS_BUCKET', raising=False)
+    monkeypatch.setattr(cloud, 'firestore_db', lambda: fake_db)
+    monkeypatch.setattr(cloud, 'bucket', lambda: pytest.fail('bucket must not be used'))
+    from security import UPLOAD_LIMITER, GENERATE_LIMITER
+    UPLOAD_LIMITER.clear()
+    GENERATE_LIMITER.clear()
+    from main import app
+    with TestClient(app) as client:
+        res = upload(client)
+        assert res.status_code == 201
+        sid, stored = res.json()['submission_id'], res.json()['stored_filename']
+        assert (tmp_path / 'uploads' / stored).is_file()
+        assert fake_db.collections['submissions'][sid]['stored_filename'] == stored
+        assert not (tmp_path / 'prove_it.db').exists()
+        assert client.get(f'/api/submissions/{sid}/content', headers=AUTH).status_code == 200
+
+
+def test_firestore_mode_without_a_project_fails_at_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv('PROVE_IT_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('PROVE_IT_STORE', 'firestore')
+    monkeypatch.delenv('GOOGLE_CLOUD_PROJECT', raising=False)
+    from main import app
+    with pytest.raises(RuntimeError, match='GOOGLE_CLOUD_PROJECT'):
+        with TestClient(app):
+            pass
+
+
+def test_unknown_store_mode_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv('PROVE_IT_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('PROVE_IT_STORE', 'firestor')
+    from main import app
+    with pytest.raises(RuntimeError, match='PROVE_IT_STORE'):
+        with TestClient(app):
+            pass

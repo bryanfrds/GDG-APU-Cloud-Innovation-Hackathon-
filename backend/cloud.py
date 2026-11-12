@@ -1,8 +1,12 @@
-"""Optional Google Cloud storage: Cloud Storage for files, Firestore for records.
+"""Optional Google Cloud storage: Firestore for records, Cloud Storage for files.
 
-Local mode (default) keeps SQLite and an uploads/ folder. Set PROVE_IT_STORE=gcp, GCS_BUCKET
-and GOOGLE_CLOUD_PROJECT to use the cloud. Credentials come from the environment
-(Application Default Credentials), never from code. The bucket must be private: uniform
+PROVE_IT_STORE picks the mode:
+- unset (default): SQLite records and an uploads/ folder, for development.
+- firestore: records in Firestore (needs GOOGLE_CLOUD_PROJECT); files stay on local disk.
+  Works on Firebase's free Spark plan, with no billing card.
+- gcp: records in Firestore and files in a Cloud Storage bucket (needs GCS_BUCKET too, which needs billing).
+
+Credentials come from the environment (Application Default Credentials), never from code. The bucket must be private: uniform
 bucket-level access with public access prevention, so files have no public URLs.
 """
 import os
@@ -14,15 +18,29 @@ from pathlib import Path
 from config import upload_dir
 
 
+def _mode() -> str:
+    return os.getenv('PROVE_IT_STORE', '').strip().lower()
+
+
+def use_firestore() -> bool:
+    """Records live in Firestore."""
+    return _mode() in ('firestore', 'gcp')
+
+
 def use_cloud() -> bool:
-    return os.getenv('PROVE_IT_STORE', '').strip().lower() == 'gcp'
+    """Files live in the Cloud Storage bucket."""
+    return _mode() == 'gcp'
 
 
 def check_cloud_settings():
     """Fail at startup, not on the first student's upload."""
-    missing = [name for name in ('GCS_BUCKET', 'GOOGLE_CLOUD_PROJECT') if not os.getenv(name, '').strip()]
+    mode = _mode()
+    if mode not in ('', 'firestore', 'gcp'):
+        raise RuntimeError('PROVE_IT_STORE must be empty, "firestore" or "gcp"')
+    needed = {'firestore': ('GOOGLE_CLOUD_PROJECT',), 'gcp': ('GCS_BUCKET', 'GOOGLE_CLOUD_PROJECT')}.get(mode, ())
+    missing = [name for name in needed if not os.getenv(name, '').strip()]
     if missing:
-        raise RuntimeError(f'PROVE_IT_STORE=gcp needs {", ".join(missing)}')
+        raise RuntimeError(f'PROVE_IT_STORE={mode} needs {", ".join(missing)}')
 
 
 @lru_cache(maxsize=1)

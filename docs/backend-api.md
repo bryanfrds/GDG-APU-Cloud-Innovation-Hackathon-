@@ -39,7 +39,8 @@ Every field is validated for single-line/hidden characters and size limits.
 - Set `PROVE_IT_DATA_DIR` for local persistent storage (SQLite + uploads).
 - This rate limiter is in-memory **per process**; it is not distributed and
   must not be the only public-network protection at scale.
-- **Cloud mode:** set `PROVE_IT_STORE=gcp` with `GCS_BUCKET` and `GOOGLE_CLOUD_PROJECT`. Files go to the
+- **Firestore-only mode:** `PROVE_IT_STORE=firestore` with `GOOGLE_CLOUD_PROJECT` keeps records in Firestore (free Spark plan, no billing card) and files on local disk, so records survive restarts but uploaded files do not.
+- **Full cloud mode:** set `PROVE_IT_STORE=gcp` with `GCS_BUCKET` and `GOOGLE_CLOUD_PROJECT`. Files go to the
   bucket under `uploads/<id>.<ext>`; records go to Firestore collections `submissions` and
   `question_sets` (full question set, including the private rubric, as one JSON string). The service
   refuses to start if the settings are missing. Credentials come from Application Default Credentials
