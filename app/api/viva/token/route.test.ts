@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,7 +54,10 @@ describe("POST /api/viva/token", () => {
   });
 
   it("still starts the viva when its session can't be saved, and says it can't be saved", async () => {
-    vi.stubEnv("VIVA_DATA_DIR", "/dev/null/cannot-write-here");
+    // A directory can't be created underneath a regular file, on any OS.
+    const blocker = path.join(dataDir, "not-a-directory");
+    writeFileSync(blocker, "");
+    vi.stubEnv("VIVA_DATA_DIR", path.join(blocker, "cannot-write-here"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { POST } = await loadRoute();
     const res = await POST(request());
