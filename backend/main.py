@@ -4,7 +4,8 @@ from pathlib import Path
 from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
-from config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES, upload_dir
+import cloud
+from config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES
 from database import get_submission, init_db, save_submission
 from file_processor import ProcessingError, process_assignment
 from security import one_line, protect_read, protect_upload
@@ -45,11 +46,10 @@ async def create_submission(title: str = Form(...), file: UploadFile = File(...)
         raise HTTPException(status_code=415, detail='Unsupported file type')
 
     submission_id = uuid4().hex
-    output_dir = upload_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
     stored_filename = f'{submission_id}{extension}'
-    destination_path = output_dir / stored_filename
+    destination_path = cloud.incoming_path(stored_filename)
     total_bytes = 0
+    committed = False
     try:
         with destination_path.open('wb') as destination:
             while chunk := await file.read(1024 * 1024):
@@ -64,13 +64,20 @@ async def create_submission(title: str = Form(...), file: UploadFile = File(...)
             process_assignment(destination_path)
         except ProcessingError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        cloud.commit_file(destination_path, stored_filename)
+        committed = True
         created_at = save_submission(
             submission_id=submission_id, title=clean_title,
             original_filename=original_filename, stored_filename=stored_filename,
             file_size_bytes=total_bytes,
         )
     except Exception:
-        destination_path.unlink(missing_ok=True)
+        cloud.discard_incoming(destination_path)
+        if committed:
+            try:
+                cloud.delete_file(stored_filename)
+            except Exception:  # keep the original error; an orphan file is the lesser problem
+                pass
         raise
     finally:
         await file.close()
@@ -102,7 +109,10 @@ def read_submission_content(submission_id: str):
             Path(filename).suffix.lower() in ALLOWED_EXTENSIONS):
         raise HTTPException(status_code=500, detail='Invalid stored filename')
     try:
-        result = process_assignment(upload_dir() / filename)
+        with cloud.stored_file(filename) as path:
+            result = process_assignment(path)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail='Uploaded file is missing') from error
     except ProcessingError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {'submission_id': submission_id, 'title': submission['title'],

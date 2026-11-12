@@ -39,7 +39,14 @@ Every field is validated for single-line/hidden characters and size limits.
 - Set `PROVE_IT_DATA_DIR` for local persistent storage (SQLite + uploads).
 - This rate limiter is in-memory **per process**; it is not distributed and
   must not be the only public-network protection at scale.
-- SQLite and local file uploads **are not durable across Cloud Run replicas**
+- **Cloud mode:** set `PROVE_IT_STORE=gcp` with `GCS_BUCKET` and `GOOGLE_CLOUD_PROJECT`. Files go to the
+  bucket under `uploads/<id>.<ext>`; records go to Firestore collections `submissions` and
+  `question_sets` (full question set, including the private rubric, as one JSON string). The service
+  refuses to start if the settings are missing. Credentials come from Application Default Credentials
+  (a Cloud Run service account, or `gcloud auth application-default login` locally). The service account
+  needs Storage Object Admin on the bucket and Cloud Datastore User. The bucket must be private
+  (uniform bucket-level access, public access prevention on). Tested only against in-memory fakes so far.
+- In local mode, SQLite and local file uploads **are not durable across Cloud Run replicas**
   or Vercel instances. Use a persistent shared database and object store
   before production deployment. A Next.js-only Vercel deployment does not
   deploy the Python service automatically.

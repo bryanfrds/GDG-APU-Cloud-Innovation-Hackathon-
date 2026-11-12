@@ -2,7 +2,7 @@
 import re
 from fastapi import APIRouter, Depends, HTTPException
 
-from config import upload_dir
+import cloud
 from database import get_submission, set_submission_status
 from file_processor import ProcessingError, process_assignment
 from question_database import get_question_set, save_question_set
@@ -60,11 +60,9 @@ def generate_questions(submission_id: str):
     stored_filename = submission['stored_filename']
     if not SAFE_STORED.fullmatch(stored_filename):
         raise HTTPException(status_code=500, detail='Invalid stored filename')
-    file_path = upload_dir() / stored_filename
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail='Uploaded file is missing')
     try:
-        extracted = process_assignment(file_path)
+        with cloud.stored_file(stored_filename) as file_path:
+            extracted = process_assignment(file_path)
         set_submission_status(submission_id, 'processing')
         generated = generate_gemini_questions(
             submission_id=submission_id,
@@ -75,6 +73,8 @@ def generate_questions(submission_id: str):
         return {'message': 'Five Gemini AI viva questions generated',
                 'generator_type': 'gemini',
                 'data': to_public_question_set(generated)}
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail='Uploaded file is missing') from error
     except ProcessingError as error:
         set_submission_status(submission_id, 'failed')
         raise HTTPException(status_code=422, detail=str(error)) from error
