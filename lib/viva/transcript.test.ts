@@ -55,12 +55,13 @@ describe("cleanTranscriptText", () => {
 
   it("removes the voice tag Gemini sometimes writes before a line", () => {
     expect(cleanTranscriptText("<speaker:default_spoken_text>Okay, thanks.")).toBe("Okay, thanks.");
+    expect(cleanTranscriptText("<speaker:voice-1>Okay.")).toBe("Okay.");
   });
 
-  it("empties a line that is only an ellipsis, but keeps one inside a sentence", () => {
-    expect(cleanTranscriptText("…")).toBe("");
-    expect(cleanTranscriptText(" ... ")).toBe("");
-    expect(cleanTranscriptText("It returns true when… the book is there")).toBe("It returns true when… the book is there");
+  it("removes a tool call Gemini writes out as text", () => {
+    const leaked = "Hello.<sink>\n<call:start_question{question_id:q1}/>\n</sink> I notice you used merge.";
+    expect(cleanTranscriptText(leaked)).toBe("Hello. I notice you used merge.");
+    expect(cleanTranscriptText("Okay.<call:end_viva{}/> Bye.")).toBe("Okay. Bye.");
   });
 
   it("keeps braces and the words 'no speech' in normal text", () => {
@@ -70,6 +71,29 @@ describe("cleanTranscriptText", () => {
   it("leaves normal text alone, including square brackets and angle brackets", () => {
     const text = "Use list[i], dict[key] and arr[idx] when i < n or x<y, and <already> is just a word here.";
     expect(cleanTranscriptText(text)).toBe(text);
+  });
+});
+
+describe("lines that are only an ellipsis", () => {
+  it("hides a spoken line that is only an ellipsis, but keeps one inside a sentence", () => {
+    for (const dots of ["…", " ... ", "..", "……"]) {
+      expect(texts(appendText(EMPTY_TRANSCRIPT, "ai", dots))).toEqual(["ai: "]);
+    }
+    expect(texts(appendText(EMPTY_TRANSCRIPT, "ai", "It returns true when… the book is there"))).toEqual([
+      "ai: It returns true when… the book is there",
+    ]);
+  });
+
+  it("keeps a typed answer that is only an ellipsis", () => {
+    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "...", { questionId: "q1", atMs: 0 }))).toEqual(["student: ..."]);
+  });
+
+  it("removes a tag that arrives split across chunks, then shows the words", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "<speaker:def");
+    t = appendText(t, "ai", "ault_spoken_text>");
+    expect(texts(t)).toEqual(["ai: "]);
+    t = appendText(t, "ai", "Okay, thanks.");
+    expect(texts(t)).toEqual(["ai: Okay, thanks."]);
   });
 });
 

@@ -36,10 +36,15 @@ const JUNK = [
   /<no speech>/giu,
   /\{pause\}/giu,
   // A voice tag it sometimes writes before a line, like "<speaker:default_spoken_text>".
-  /<speaker:[a-z_]+>/giu,
-  // A line that is only an ellipsis: it writes one while thinking, and it says nothing.
-  /^\s*(?:\u2026|\.\.\.)\s*$/u,
+  /<speaker:[\w-]+>/giu,
+  // A tool call written out as text, like "<sink><call:start_question{question_id:q1}/></sink>".
+  /<sink>[\s\S]*?<\/sink>/giu,
+  /<call:[^<>]*\/>/giu,
 ];
+
+// The examiner writes a line that is only an ellipsis while it thinks; it says nothing.
+// Only for spoken lines: a student who types "..." means something by it.
+const ONLY_ELLIPSIS = /^\s*(?:\u2026+|\.{2,})\s*$/u;
 
 /** Removes Gemini's leaked tags from transcript text, and the extra spaces they leave. */
 export function cleanTranscriptText(text: string): string {
@@ -47,7 +52,9 @@ export function cleanTranscriptText(text: string): string {
 }
 
 function line(who: Speaker, raw: string, meta: LineMeta, typed = false): Line {
-  return { who, raw, text: cleanTranscriptText(raw).trimStart(), ...meta, ...(typed ? { typed: true as const } : {}) };
+  const cleaned = cleanTranscriptText(raw).trimStart();
+  const text = !typed && ONLY_ELLIPSIS.test(cleaned) ? "" : cleaned;
+  return { who, raw, text, ...meta, ...(typed ? { typed: true as const } : {}) };
 }
 
 export function appendText(t: Transcript, who: Speaker, text: string, meta: LineMeta): Transcript {
