@@ -24,23 +24,23 @@
  * Environment variables required:
  *   GEMINI_API_KEY  — your Google AI Studio API key (required).
  *   GEMINI_MODEL    — the Gemini model to use (optional).
- *                     Defaults to "gemini-2.5-flash" if not set.
- *                     Recommended values: "gemini-2.5-flash", "gemini-2.5-pro",
- *                     "gemini-3-flash-preview".
+ *                     Defaults to "gemini-3.5-flash" if not set.
+ *                     Available to our key (Nov 2026): "gemini-3.5-flash", "gemini-3.8-flash".
  */
 
-import { GoogleGenAI, Type, ApiError } from "@google/genai";  //Task 4
+import { GoogleGenAI, Type, ApiError, ThinkingLevel } from "@google/genai";  //Task 4
 import { MIN_ANSWER_SCORE, MAX_ANSWER_SCORE } from "./scoringConfig";
 
 // ---------------------------------------------------------------------------
 // MODEL CONFIGURATION
 // Pulled from an environment variable so no model name is hardcoded here.
 // The caller (or .env.local) controls which model is used.
-// "gemini-2.5-flash" is a solid default: fast, low-cost, good at instruction
+// A flash model is a solid default: fast, low-cost, good at instruction
 // following and JSON output — well-suited to this scoring task.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash isn't available to our key any more; 3.5-flash is the one question writing uses too.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 
 // ---------------------------------------------------------------------------
 // INPUT TYPE
@@ -319,6 +319,8 @@ export async function evaluateAnswer(
       contents: userMessage,
       config: {
         systemInstruction,
+        // Low thinking keeps each call to a few seconds, so a whole viva scores within the request limit.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseJsonSchema: {
           type: Type.OBJECT,

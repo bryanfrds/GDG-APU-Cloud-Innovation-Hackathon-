@@ -133,3 +133,43 @@ describe("POST /api/viva/token with a submission", () => {
     expect((await POST(request({ submissionId: SUBMISSION_ID }))).status).toBe(502);
   });
 });
+
+describe("POST /api/viva/token with a submission saved by this app", () => {
+  let dir = "";
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "viva-local-sub-"));
+    vi.stubEnv("VIVA_DATA_DIR", dir);
+    vi.stubEnv("GEMINI_API_KEY", "AIzaFAKE");
+    vi.stubEnv("DEMO_PASSCODE", "");
+    vi.stubEnv("PROVE_IT_API_URL", "");
+    create.mockReset();
+    create.mockResolvedValue({ name: "auth_tokens/local" });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("starts the viva on the uploaded questions and locks the submission into the session", async () => {
+    const { saveSubmission, newSubmissionId } = await import("@/lib/submissions/store");
+    const submissionId = newSubmissionId();
+    await saveSubmission({
+      submissionId, title: "Sorting Assignment", fileName: "a.py", kind: "code", text: "x",
+      plan: SAVED_PLAN, details: [], createdAt: "2026-11-12T00:00:00.000Z",
+    });
+    const { POST } = await loadRoute();
+    const res = await POST(request({ submissionId, mode: "demo" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.plan).toEqual(SAVED_PLAN);
+    expect(body.submissionId).toBe(submissionId);
+    const session = JSON.parse(readFileSync(path.join(dir, `${body.vivaId}.session.json`), "utf8"));
+    expect(session.submissionId).toBe(submissionId);
+  });
+
+  it("refuses a submission this app never saved", async () => {
+    const { POST } = await loadRoute();
+    expect((await POST(request({ submissionId: "sub_00000000000000000000" }))).status).toBe(404);
+    expect(create).not.toHaveBeenCalled();
+  });
+});

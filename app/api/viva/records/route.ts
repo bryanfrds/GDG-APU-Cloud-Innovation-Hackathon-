@@ -6,6 +6,7 @@ import { MODE_SECONDS, samePlan } from "@/lib/viva/plan";
 import { createRateLimiter } from "@/lib/viva/rate-limit";
 import { parseRecord } from "@/lib/viva/record";
 import { clientAddress, passcodeOk, readJsonBody } from "@/lib/viva/request-guard";
+import { kvListAdd } from "@/lib/kv";
 import { getRecord, getSession, saveRecordOnce, type StoredRecord } from "@/lib/viva/store";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +41,12 @@ export async function POST(req: Request) {
   if (!session) return Response.json({ error: "This viva wasn't started on this server." }, { status: 404 });
 
   // Don't trust the browser's copy of what the viva was about.
-  if (record.mode !== session.mode || !samePlan(record.plan, session.plan)) {
+  // The submission too: a record can't be filed under a submission other than the one its viva was for.
+  if (
+    record.mode !== session.mode ||
+    !samePlan(record.plan, session.plan) ||
+    (record.submissionId ?? null) !== (session.submissionId ?? null)
+  ) {
     return Response.json({ error: "The record doesn't match the viva that was started." }, { status: 409 });
   }
 
@@ -65,6 +71,9 @@ export async function POST(req: Request) {
     }
     return Response.json({ error: "This viva has already been saved." }, { status: 409 });
   }
+
+  // List it for the lecturer page. If that fails the record is still saved; it just won't be listed.
+  await kvListAdd("proveit:vivas", record.vivaId).catch((err) => console.error("Failed to list saved viva", err));
 
   return Response.json({ ok: true, vivaId: record.vivaId }, { status: 201 });
 }

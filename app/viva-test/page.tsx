@@ -26,7 +26,6 @@ import {
 import { createTypingMode, type TypingMode } from "@/lib/viva/typing";
 import {
   MODE_SECONDS,
-  SAMPLE_PLAN,
   type VivaMode,
   type VivaPlan,
 } from "@/lib/viva/plan";
@@ -73,6 +72,18 @@ export default function VivaTestPage() {
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [finished, setFinished] = useState<FinisherState>(IDLE_STATE);
   const [typed, setTyped] = useState("");
+  // Which submission this viva is about, from ?submission=… (set by the upload page). None = sample questions.
+  const [submissionId, setSubmissionId] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("submission");
+    if (id && /^[A-Za-z0-9_-]{8,64}$/.test(id)) setSubmissionId(id);
+    try {
+      const saved = sessionStorage.getItem("proveit-passcode");
+      if (saved) setPasscode((p) => p || saved);
+    } catch {
+      // storage blocked: the student types the passcode instead
+    }
+  }, []);
   const [typedError, setTypedError] = useState("");
   const [muted, setMuted] = useState(false);
 
@@ -215,7 +226,7 @@ export default function VivaTestPage() {
           "content-type": "application/json",
           ...(passcode ? { "x-demo-code": passcode } : {}),
         },
-        body: JSON.stringify({ plan: SAMPLE_PLAN, mode }),
+        body: JSON.stringify(submissionId ? { submissionId, mode } : { mode }),
         signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
       });
       const body = await res.json().catch(() => ({}));
@@ -274,6 +285,7 @@ export default function VivaTestPage() {
         mode: body.mode === "demo" ? "demo" : "full",
         plan: body.plan,
         startedAt: startedAtRef.current,
+        submissionId: typeof body.submissionId === "string" ? body.submissionId : null,
       });
       setPlan(body.plan);
       setStatus("live");
@@ -419,8 +431,18 @@ export default function VivaTestPage() {
       <main style={styles.card}>
         {/* Header */}
         <header style={styles.header}>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={styles.title}>AI Oral Examination</h1>
+            <p style={styles.subtitle}>
+              {submissionId ? (
+                "Questions about your uploaded assignment."
+              ) : (
+                <>
+                  Sample questions on sorting. <a href="/submit">Upload your assignment</a> for your own.
+                </>
+              )}{" "}
+              Use headphones if you can, so the examiner doesn&apos;t hear itself.
+            </p>
           </div>
           <div
             data-testid="status"
