@@ -45,3 +45,32 @@ def test_rejects_malformed_or_unsubstantiated_response(mutate):
     mutate(payload)
     with pytest.raises(ValueError):
         validate(payload)
+
+
+def pdf_payload(pages):
+    payload = data()
+    for q in payload['questions']:
+        q.update(source_file='assignment.pdf', source_lines=[], source_pages=pages)
+    return payload
+
+
+def validate_pdf(payload, page_count=2):
+    return validate_generated_response(json.dumps(payload), submission_id='real-id',
+        filename='report.pdf', safe_filename='assignment.pdf', line_count=40,
+        is_pdf=True, page_count=page_count)
+
+
+def test_pdf_accepts_pages_that_exist():
+    assert validate_pdf(pdf_payload([1, 2])).questions[0].source_pages == [1, 2]
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda p: p['questions'][0].update(source_pages=[3]),
+    lambda p: p['questions'][0].update(source_pages=[0]),
+    lambda p: p['questions'][0].update(source_lines=[1]),
+])
+def test_pdf_rejects_invented_pages_or_lines(mutate):
+    payload = pdf_payload([1])
+    mutate(payload)
+    with pytest.raises(ValueError):
+        validate_pdf(payload)
