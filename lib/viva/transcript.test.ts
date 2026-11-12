@@ -84,8 +84,24 @@ describe("lines that are only an ellipsis", () => {
     ]);
   });
 
-  it("keeps a typed answer that is only an ellipsis", () => {
-    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "...", { questionId: "q1", atMs: 0 }))).toEqual(["student: ..."]);
+  it("leaves typed answers exactly as typed, ellipsis and code included", () => {
+    const meta = { questionId: "q1", atMs: 0 };
+    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "...", meta))).toEqual(["student: ..."]);
+    expect(texts(addTypedLine(EMPTY_TRANSCRIPT, "JSX <call:foo/> is self-closing", meta))).toEqual(["student: JSX <call:foo/> is self-closing"]);
+  });
+
+  it("removes a <sink> tool call that arrives split across chunks", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "Hello.<sink>\n<call:start_q");
+    t = appendText(t, "ai", "uestion{question_id:q1}/>\n</si");
+    t = appendText(t, "ai", "nk> I notice you used merge.");
+    expect(texts(t)).toEqual(["ai: Hello. I notice you used merge."]);
+  });
+
+  it("doesn't let an unclosed <sink> swallow the speech after it", () => {
+    let t = appendText(EMPTY_TRANSCRIPT, "ai", "A<sink><call:x{}/> real words here <sink><call:y{}/></sink> end");
+    expect(texts(t)).toEqual(["ai: A real words here end"]);
+    t = appendText(EMPTY_TRANSCRIPT, "ai", "Hello.<sink>\n Then real speech.");
+    expect(texts(t)).toEqual(["ai: Hello.\n Then real speech."]);
   });
 
   it("removes a tag that arrives split across chunks, then shows the words", () => {

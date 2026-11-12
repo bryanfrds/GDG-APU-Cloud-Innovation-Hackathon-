@@ -38,8 +38,11 @@ const JUNK = [
   // A voice tag it sometimes writes before a line, like "<speaker:default_spoken_text>".
   /<speaker:[\w-]+>/giu,
   // A tool call written out as text, like "<sink><call:start_question{question_id:q1}/></sink>".
-  /<sink>[\s\S]*?<\/sink>/giu,
-  /<call:[^<>]*\/>/giu,
+  // A pair never reaches back past another <sink>, so an unclosed one can't swallow speech.
+  /<sink>(?:(?!<sink>)[\s\S])*?<\/sink>/giu,
+  /\s*<call:[^<>]*\/>/giu,
+  // A stray half of a pair, if the turn ended before the other half arrived.
+  /<\/?sink>/giu,
 ];
 
 // The examiner writes a line that is only an ellipsis while it thinks; it says nothing.
@@ -52,8 +55,11 @@ export function cleanTranscriptText(text: string): string {
 }
 
 function line(who: Speaker, raw: string, meta: LineMeta, typed = false): Line {
+  // Typed answers come from the student, not Gemini, so none of Gemini's tags can be in them:
+  // cleaning them could only eat what the student wrote (code like "<call:foo/>", or "...").
+  if (typed) return { who, raw, text: raw.trimStart(), ...meta, typed: true as const };
   const cleaned = cleanTranscriptText(raw).trimStart();
-  const text = !typed && ONLY_ELLIPSIS.test(cleaned) ? "" : cleaned;
+  const text = ONLY_ELLIPSIS.test(cleaned) ? "" : cleaned;
   return { who, raw, text, ...meta, ...(typed ? { typed: true as const } : {}) };
 }
 
