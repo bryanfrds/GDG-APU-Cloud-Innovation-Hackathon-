@@ -1,6 +1,7 @@
 """Gemini question generation, with strict local validation and bounded fallbacks."""
 import json
 import os
+import re
 from pathlib import Path
 
 from google import genai
@@ -21,7 +22,8 @@ class GeminiUnavailableError(RuntimeError):
 
 def validate_generated_response(raw_text: str, *, submission_id: str,
                                 filename: str, safe_filename: str,
-                                line_count: int, is_pdf: bool) -> QuestionSet:
+                                line_count: int, is_pdf: bool,
+                                page_count: int = 0) -> QuestionSet:
     """Validate untrusted model response; never trust model-supplied metadata."""
     try:
         payload = json.loads(raw_text)
@@ -52,8 +54,11 @@ def validate_generated_response(raw_text: str, *, submission_id: str,
         raise ValueError('Invalid difficulty order')
     for q in result.questions:
         if is_pdf:
-            if q.source_lines or q.source_pages:
-                raise ValueError('Unverified PDF line/page evidence')
+            # Lines are meaningless in a PDF; pages must be ones the extractor really saw.
+            if q.source_lines:
+                raise ValueError('Unverified PDF line evidence')
+            if any(n < 1 or n > page_count for n in q.source_pages):
+                raise ValueError('Invalid PDF page reference')
         else:
             if not q.source_lines or q.source_pages:
                 raise ValueError('Missing or unexpected source evidence')
@@ -78,6 +83,7 @@ def generate_gemini_questions(submission_id: str, filename: str,
     safe_filename = 'assignment' + (extension if extension in
                                     {'.pdf', '.py', '.java', '.cpp', '.txt'} else '.txt')
     lines = content.splitlines()
+    page_count = len(re.findall(r'^\[Page \d+\]$', content, re.M)) if is_pdf else 0
     # Angle-bracket substitution prevents closing the delimiting markers.
     safe_text = content.replace('<', '‹').replace('>', '›')
     if not is_pdf:
@@ -90,7 +96,8 @@ about the student's ACTUAL submitted code or report: q1 easy, q2 easy, q3
 medium, q4 medium, q5 hard. Each question should be <= 400 characters,
 be a single line, and have a topic, source_file, source_lines, source_pages,
 expected_points, and follow_up_hint. Cite only real source lines (1-based);
-for PDFs leave both source arrays empty. Use source_file exactly as provided.
+for PDFs leave source_lines empty and cite only
+pages that appear in the [Page N] markers in source_pages. Use source_file exactly as provided.
 Do not invent code, and return only JSON matching the schema.'''
     prompt = (f'Safe source filename: {safe_filename}\n'
               f'File type: {"PDF" if is_pdf else "code/text"}\n'
@@ -136,6 +143,7 @@ Do not invent code, and return only JSON matching the schema.'''
                     response.text, submission_id=submission_id,
                     filename=filename, safe_filename=safe_filename,
                     line_count=len(lines), is_pdf=is_pdf,
+                    page_count=page_count,
                 )
             except ClientError as error:
                 if error.code == 429:

@@ -1,6 +1,7 @@
-"""Local SQLite metadata; must be replaced for multi-instance production use."""
+"""Submission records: local SQLite by default, Firestore when PROVE_IT_STORE=gcp."""
 import sqlite3
 from datetime import datetime, timezone
+import cloud
 from config import database_path
 
 
@@ -13,6 +14,9 @@ def get_connection():
 
 
 def init_db():
+    cloud.check_cloud_settings()
+    if cloud.use_firestore():
+        return
     with get_connection() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS submissions (
             submission_id TEXT PRIMARY KEY,
@@ -25,8 +29,18 @@ def init_db():
         )''')
 
 
-def save_submission(submission_id, title, original_filename, stored_filename, file_size_bytes):
+def save_submission(submission_id, title, original_filename, stored_filename, file_size_bytes,
+                    extracted=None):
     created_at = datetime.now(timezone.utc).isoformat()
+    if cloud.use_firestore():
+        # create() fails if the id exists, so a record is never silently overwritten.
+        cloud.firestore_db().collection('submissions').document(submission_id).create({
+            'submission_id': submission_id, 'title': title,
+            'original_filename': original_filename, 'stored_filename': stored_filename,
+            'file_size_bytes': file_size_bytes, 'status': 'uploaded', 'created_at': created_at,
+            # Extracted text (30,000 characters at most) so no durable file store is needed.
+            **({'extracted': extracted} if extracted else {})})
+        return created_at
     with get_connection() as conn:
         conn.execute('''INSERT INTO submissions
             (submission_id, title, original_filename, stored_filename,
@@ -37,6 +51,9 @@ def save_submission(submission_id, title, original_filename, stored_filename, fi
 
 
 def get_submission(submission_id):
+    if cloud.use_firestore():
+        snapshot = cloud.firestore_db().collection('submissions').document(submission_id).get()
+        return snapshot.to_dict() if snapshot.exists else None
     with get_connection() as conn:
         row = conn.execute('SELECT * FROM submissions WHERE submission_id = ?',
                            (submission_id,)).fetchone()
@@ -46,6 +63,9 @@ def get_submission(submission_id):
 def set_submission_status(submission_id: str, status: str):
     if status not in ('uploaded', 'processing', 'ready', 'failed'):
         raise ValueError('Unknown submission status')
+    if cloud.use_firestore():
+        cloud.firestore_db().collection('submissions').document(submission_id).update({'status': status})
+        return
     with get_connection() as conn:
         conn.execute('UPDATE submissions SET status=? WHERE submission_id=?',
                      (status, submission_id))
